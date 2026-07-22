@@ -18,6 +18,7 @@ from auth import login as auth_login
 from chatroom import Connection as ChatroomConnection
 from danmu_engine import DanmuEngine
 from overlay import DanmuOverlay
+import overlay as overlay_module
 from tray import Tray
 from hotkey import HotkeyManager
 from settings_window import SettingsDialog
@@ -65,9 +66,11 @@ class App:
             "danmuHeight": self.config.display.danmu_height,
             "danmuOpacity": self.config.display.danmu_opacity,
             "fontSize": self.config.display.font_size,
-        }, self.config.theme)
+        })
 
         self.overlay = DanmuOverlay(self.engine)
+        # Set theme on overlay
+        self.overlay.theme = overlay_module.THEME_LIGHT if self.config.theme == "light" else overlay_module.THEME_DARK
 
         # Set overlay to fullscreen
         screen = self.app.primaryScreen().geometry()
