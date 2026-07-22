@@ -7,7 +7,7 @@ semi-transparent, blurred bar at the bottom of the screen.
 import logging
 
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QPainter, QFont
+from PyQt6.QtGui import QColor, QPainter
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLineEdit, QLabel, QApplication,
 )
@@ -25,9 +25,7 @@ class InputBox(QWidget):
         "bg": "rgba(13, 17, 23, 0.92)",
         "border": "rgba(255, 255, 255, 0.08)",
         "input_bg": "rgba(255, 255, 255, 0.04)",
-        "input_bg_hover": "rgba(255, 255, 255, 0.08)",
         "text_primary": "#e6edf3",
-        "text_secondary": "#8b949e",
         "text_muted": "#6e7681",
         "accent": "#58a6ff",
         "error": "#f85149",
@@ -37,9 +35,7 @@ class InputBox(QWidget):
         "bg": "rgba(255, 255, 255, 0.92)",
         "border": "rgba(0, 0, 0, 0.12)",
         "input_bg": "rgba(0, 0, 0, 0.04)",
-        "input_bg_hover": "rgba(0, 0, 0, 0.08)",
         "text_primary": "#1f2328",
-        "text_secondary": "#656d76",
         "text_muted": "#8c959f",
         "accent": "#0969da",
         "error": "#cf222e",
@@ -52,7 +48,6 @@ class InputBox(QWidget):
             Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
             | Qt.WindowType.Tool
-            | Qt.WindowType.WindowDoesNotAcceptFocus
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
@@ -87,10 +82,8 @@ class InputBox(QWidget):
         t = self.THEME_LIGHT if self._theme == "light" else self.THEME_DARK
         self.setStyleSheet(f"""
             QWidget {{
-                background: {t['bg']};
-                border: 1px solid {t['border']};
-                border-radius: 10px;
-                color: {t['text_primary']};
+                background: transparent;
+                border: none;
             }}
             QLineEdit {{
                 background: {t['input_bg']};
@@ -125,16 +118,10 @@ class InputBox(QWidget):
         self.lbl_error.clear()
         self.show()
         self.raise_()
-        # Force focus so keystrokes go directly into the field
-        self.setWindowFlag(Qt.WindowType.WindowDoesNotAcceptFocus, False)
-        self.show()
+        self.activateWindow()
         self.input_field.setFocus(Qt.FocusReason.PopupFocusReason)
 
     def hide_input(self):
-        self.hide()
-        # Restore click-through-friendly flag while hidden
-        self.setWindowFlag(Qt.WindowType.WindowDoesNotAcceptFocus, True)
-        self.show()
         self.hide()
 
     def _on_send(self):
@@ -142,21 +129,22 @@ class InputBox(QWidget):
         if text:
             self.message_sent.emit(text)
             self.input_field.clear()
-            self.hide()
+            self.hide_input()
 
     def set_error(self, msg: str):
         self.lbl_error.setText(msg)
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key.Key_Escape:
-            self.hide()
+            self.hide_input()
         else:
             super().keyPressEvent(event)
 
     def paintEvent(self, event):
-        # Optional: draw a subtle background rect to ensure rounded corners
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(13, 17, 23, 235))
+        t = self.THEME_LIGHT if self._theme == "light" else self.THEME_DARK
+        # Parse rgba string for QColor
+        painter.setBrush(QColor(t["bg"]))
         painter.drawRoundedRect(self.rect(), 10, 10)

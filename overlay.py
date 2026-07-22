@@ -222,8 +222,12 @@ class DanmuOverlay(QWidget):
         painter.end()
 
     def _measure_item_width(self, item: DanmuItem) -> float:
-        """Measure total width of a danmu item (nickname + content)."""
-        w = 0.0
+        """Measure total width of a danmu item (avatar + nickname + content)."""
+        w = 16  # padding
+
+        if self.engine.show_avatar and item.nickname:
+            w += int(self.engine.font_size * 1.4) + 8
+
         if self.engine.show_nickname and item.nickname:
             nick = item.nickname + ": "
             w += self.font_metrics.horizontalAdvance(nick)
@@ -234,12 +238,40 @@ class DanmuOverlay(QWidget):
         if item.has_image and not self.engine.show_image:
             content = "[图片] " + content
         w += self.font_metrics.horizontalAdvance(content)
-        return w + 20  # padding
+        return w + 16  # padding
 
     def _strip_html(self, text: str) -> str:
         """Strip HTML tags for text measurement."""
         import re
         return re.sub(r'<[^>]+>', '', text).strip()
+
+    def _avatar_color(self, nickname: str) -> QColor:
+        """Generate a consistent avatar background color from nickname."""
+        hue = abs(hash(nickname)) % 360
+        return QColor.fromHsv(hue, 180, 220)
+
+    def _draw_avatar(self, painter: QPainter, x: float, y: float, size: int,
+                     nickname: str) -> None:
+        """Draw a circular avatar placeholder with the first letter."""
+        color = self._avatar_color(nickname)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(color)
+        painter.drawEllipse(int(x), int(y), size, size)
+
+        letter = nickname[0].upper() if nickname else "?"
+        font = QFont(self.font)
+        font.setPointSize(int(size * 0.5))
+        painter.setFont(font)
+        painter.setPen(QPen(QColor(255, 255, 255)))
+        fm = QFontMetrics(font)
+        tw = fm.horizontalAdvance(letter)
+        th = fm.ascent()
+        painter.drawText(
+            int(x + (size - tw) / 2),
+            int(y + th + (size - th) / 2 - 2),
+            letter,
+        )
+        painter.setFont(self.font)
 
     def _get_item_pixmap(self, item: DanmuItem) -> QPixmap:
         """Get or create a pre-rendered pixmap for a scrolling item."""
@@ -263,8 +295,14 @@ class DanmuOverlay(QWidget):
         p.setRenderHint(QPainter.RenderHint.TextAntialiasing)
         p.setFont(self.font)
 
+        avatar_size = int(self.engine.font_size * 1.4)
         text_y = self.font_metrics.ascent() + 5
-        text_x = 10
+        text_x = 12
+
+        # Draw avatar
+        if self.engine.show_avatar and item.nickname:
+            self._draw_avatar(p, text_x, 5, avatar_size, item.nickname)
+            text_x += avatar_size + 8
 
         # Draw nickname
         if self.engine.show_nickname and item.nickname:
@@ -361,62 +399,112 @@ class DanmuOverlay(QWidget):
 
     def _draw_card(self, painter: QPainter, item: DanmuItem,
                     x: float, y: float, w: float, h: float) -> float:
-        """Draw a floating card. Returns actual height used."""
+        """Draw a floating card (right-side list). Returns actual height used."""
+        padding = 10
+        avatar_size = 28
+        gap = 8
+        line_gap = 2
+
+        # Prepare fonts
+        nick_font = QFont(self.font)
+        nick_font.setPointSize(max(8, self.engine.font_size - 6))
+        nick_fm = QFontMetrics(nick_font)
+
+        content_font = QFont(self.font)
+        content_font.setPointSize(max(9, self.engine.font_size - 4))
+        content_fm = QFontMetrics(content_font)
+
+        content = self._strip_html(item.content)
+        if item.has_image and not self.engine.show_image:
+            content = "[图片] " + content
+
+        # Measure content width inside card
+        text_w = w - padding * 2 - (avatar_size + gap if self.engine.show_avatar else 0)
+        content_elided = content_fm.elidedText(content, Qt.TextElideMode.ElideRight, int(text_w))
+
+        nick_h = nick_fm.height() if self.engine.show_nickname and item.nickname else 0
+        content_h = content_fm.height() if content else 0
+        total_h = padding * 2 + nick_h + (line_gap if nick_h else 0) + content_h
+        total_h = max(total_h, avatar_size + padding * 2)
+
+        # Draw card background/border
         painter.setPen(QPen(self.theme["card_border"]))
         painter.setBrush(self.theme["card_bg"])
-        painter.drawRoundedRect(QRectF(x, y, w, h), 8, 8)
+        painter.drawRoundedRect(QRectF(x, y, w, total_h), 8, 8)
 
-        text_x = x + 12
-        text_y = y + self.font_metrics.ascent() + 8
+        # Draw avatar
+        text_x = x + padding
+        if self.engine.show_avatar and item.nickname:
+            self._draw_avatar(painter, text_x, y + padding + (total_h - padding * 2 - avatar_size) / 2,
+                              avatar_size, item.nickname)
+            text_x += avatar_size + gap
 
-        # Nickname
+        # Draw nickname
+        text_y = y + padding + nick_fm.ascent()
         if self.engine.show_nickname and item.nickname:
             painter.setPen(QPen(self.theme["nickname"]))
-            font = QFont(self.font)
-            font.setPointSize(max(8, self.engine.font_size - 4))
-            painter.setFont(font)
-            fm = QFontMetrics(font)
+            painter.setFont(nick_font)
             painter.drawText(int(text_x), int(text_y), item.nickname)
-            text_x += fm.horizontalAdvance(item.nickname) + 8
 
-        # Content
-        content = self._strip_html(item.content)
-        if item.has_image and not self.engine.show_image:
-            content = "[图片] " + content
+        # Draw content
+        text_y += nick_h + line_gap
         painter.setPen(QPen(self.theme["text"]))
-        font2 = QFont(self.font)
-        font2.setPointSize(max(9, self.engine.font_size - 3))
-        painter.setFont(font2)
-        painter.drawText(int(text_x), int(text_y), content)
+        painter.setFont(content_font)
+        painter.drawText(int(text_x), int(text_y), content_elided)
+
         painter.setFont(self.font)
-        return h
+        return total_h
 
     def _draw_bubble(self, painter: QPainter, item: DanmuItem,
-                      x: float, y: float, w: float, h: float) -> None:
-        """Draw a bottom bubble."""
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(self.theme["card_bg"])
-        painter.drawRoundedRect(QRectF(x, y, w, h), 12, 12)
+                      x: float, y: float, w: float, h: float) -> float:
+        """Draw a bottom bubble. Returns actual height used."""
+        padding = 10
+        avatar_size = 24
+        gap = 8
 
-        text_x = x + 14
-        text_y = y + self.font_metrics.ascent() + 6
+        nick_font = QFont(self.font)
+        nick_font.setPointSize(max(8, self.engine.font_size - 6))
+        nick_fm = QFontMetrics(nick_font)
 
-        font = QFont(self.font)
-        font.setPointSize(max(10, self.engine.font_size - 4))
-        painter.setFont(font)
-        fm = QFontMetrics(font)
-
-        if self.engine.show_nickname and item.nickname:
-            painter.setPen(QPen(self.theme["nickname"]))
-            painter.drawText(int(text_x), int(text_y), item.nickname + ":")
-            text_x += fm.horizontalAdvance(item.nickname + ":") + 6
+        content_font = QFont(self.font)
+        content_font.setPointSize(max(9, self.engine.font_size - 4))
+        content_fm = QFontMetrics(content_font)
 
         content = self._strip_html(item.content)
         if item.has_image and not self.engine.show_image:
             content = "[图片] " + content
+
+        text_w = w - padding * 2 - (avatar_size + gap if self.engine.show_avatar else 0)
+        content_elided = content_fm.elidedText(content, Qt.TextElideMode.ElideRight, int(text_w))
+
+        nick_h = nick_fm.height() if self.engine.show_nickname and item.nickname else 0
+        content_h = content_fm.height() if content else 0
+        total_h = padding * 2 + nick_h + 2 + content_h
+        total_h = max(total_h, avatar_size + padding * 2)
+
+        painter.setPen(QPen(self.theme["card_border"]))
+        painter.setBrush(self.theme["card_bg"])
+        painter.drawRoundedRect(QRectF(x, y, w, total_h), 12, 12)
+
+        text_x = x + padding
+        if self.engine.show_avatar and item.nickname:
+            self._draw_avatar(painter, text_x, y + padding + (total_h - padding * 2 - avatar_size) / 2,
+                              avatar_size, item.nickname)
+            text_x += avatar_size + gap
+
+        text_y = y + padding + nick_fm.ascent()
+        if self.engine.show_nickname and item.nickname:
+            painter.setPen(QPen(self.theme["nickname"]))
+            painter.setFont(nick_font)
+            painter.drawText(int(text_x), int(text_y), item.nickname)
+
+        text_y += nick_h + 2
         painter.setPen(QPen(self.theme["text"]))
-        painter.drawText(int(text_x), int(text_y), content)
+        painter.setFont(content_font)
+        painter.drawText(int(text_x), int(text_y), content_elided)
+
         painter.setFont(self.font)
+        return total_h
 
     def add_message(self, msg: dict) -> None:
         """Add a new message to the engine and ensure render loop is running."""

@@ -299,7 +299,7 @@ class SettingsDialog(QDialog):
         # Build panels
         self._build_account_panel()
         self._build_display_panel()
-        self._build_hotkey_panel()
+        self._build_hotkey_tab()
 
         # Footer
         footer = QWidget()
