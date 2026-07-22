@@ -116,18 +116,18 @@ class SettingsDialog(QDialog):
             #contentArea {{
                 background: transparent;
             }}
-            .sectionLabel {{
+            QLabel[class="sectionLabel"] {{
                 color: {c['text_secondary']};
                 font-size: 11px;
                 text-transform: uppercase;
                 letter-spacing: 1.5px;
-                margin-top: 4px;
-                margin-bottom: 10px;
+                padding-top: 4px;
+                padding-bottom: 10px;
             }}
-            .fieldLabel {{
+            QLabel[class="fieldLabel"] {{
                 color: {c['text_muted']};
                 font-size: 11px;
-                margin-bottom: 4px;
+                padding-bottom: 4px;
             }}
             QLineEdit, QComboBox {{
                 background: {c['bg_input']};
@@ -448,13 +448,18 @@ class SettingsDialog(QDialog):
         self.slider_font = self._make_slider(12, 48, self.config.display.font_size)
         layout.addLayout(self._slider_row("字号", self.slider_font, self.config.display.font_size, "px"))
 
-        # Save button
-        layout.addSpacing(8)
-        save_btn = QPushButton("保存显示设置")
-        save_btn.setObjectName("primaryBtn")
-        save_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        save_btn.clicked.connect(self._on_save_display)
-        layout.addWidget(save_btn)
+        # Live-apply display changes
+        for btn in (self.btn_mode_scroll, self.btn_mode_float, self.btn_mode_bottom):
+            btn.clicked.connect(self._emit_config_save)
+        self.chk_avatar.stateChanged.connect(self._emit_config_save)
+        self.chk_nickname.stateChanged.connect(self._emit_config_save)
+        self.chk_image.stateChanged.connect(self._emit_config_save)
+        self.combo_area.currentIndexChanged.connect(self._emit_config_save)
+        self.slider_speed.valueChanged.connect(self._emit_config_save)
+        self.slider_width.valueChanged.connect(self._emit_config_save)
+        self.slider_height.valueChanged.connect(self._emit_config_save)
+        self.slider_opacity.valueChanged.connect(self._emit_config_save)
+        self.slider_font.valueChanged.connect(self._emit_config_save)
 
         layout.addStretch()
 

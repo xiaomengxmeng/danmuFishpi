@@ -101,6 +101,7 @@ class App:
 
         # Create hotkey manager
         self.hotkey_mgr = HotkeyManager()
+        self.hotkey_mgr.install_filter()
         if self.config.hotkey:
             self.hotkey_mgr.register(self.config.hotkey, self.show_input_box)
 
