@@ -22,6 +22,7 @@ import overlay as overlay_module
 from tray import Tray
 from hotkey import HotkeyManager
 from settings_window import SettingsDialog
+from input_box import InputBox
 
 logging.basicConfig(
     level=logging.INFO,
@@ -95,10 +96,13 @@ class App:
         self.tray.set_mode_checked(self.config.display.danmu_mode)
         self.tray.set_theme_checked(self.config.theme)
 
+        # Create input box (created lazily)
+        self.input_box = None
+
         # Create hotkey manager
         self.hotkey_mgr = HotkeyManager()
         if self.config.hotkey:
-            self.hotkey_mgr.register(self.config.hotkey, self.show_settings)
+            self.hotkey_mgr.register(self.config.hotkey, self.show_input_box)
 
         # Settings dialog (created lazily)
         self.settings_dialog = None
@@ -233,6 +237,26 @@ class App:
                 logger.error(f"Send failed: {error}")
         threading.Thread(target=_send, daemon=True).start()
 
+    # ── Input Box ──────────────────────────────────────────────
+
+    def show_input_box(self) -> None:
+        """Show the floating message input box (bound to global hotkey)."""
+        if self.input_box is None:
+            self.input_box = InputBox(theme=self.config.theme)
+            self.input_box.message_sent.connect(self.send_message)
+
+        # Make sure the overlay doesn't swallow focus/keystrokes
+        self.overlay.set_click_through(False)
+        self.input_box.set_theme(self.config.theme)
+        self.input_box.show_at_bottom()
+        self.input_box.activateWindow()
+
+    def hide_input_box(self) -> None:
+        """Hide the floating input box and restore overlay click-through."""
+        if self.input_box:
+            self.input_box.hide()
+        self.overlay.set_click_through(True)
+
     # ── Settings ───────────────────────────────────────────────
 
     def show_settings(self) -> None:
@@ -274,6 +298,15 @@ class App:
 
         # Update tray menu
         self.tray.set_mode_checked(self.config.display.danmu_mode)
+
+        # Update input box theme
+        if self.input_box:
+            self.input_box.set_theme(self.config.theme)
+
+        # Re-register hotkey if it changed
+        new_hotkey = self.config.hotkey
+        if new_hotkey and new_hotkey != self.hotkey_mgr._current_hotkey:
+            self.hotkey_mgr.register(new_hotkey, self.show_input_box)
 
     # ── Tray callbacks ─────────────────────────────────────────
 
