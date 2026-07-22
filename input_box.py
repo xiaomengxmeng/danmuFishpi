@@ -19,6 +19,7 @@ class InputBox(QWidget):
     """A floating, frameless input box for sending chatroom messages."""
 
     message_sent = pyqtSignal(str)
+    closed = pyqtSignal()
 
     # Theme colors matching the overlay/settings
     THEME_DARK = {
@@ -122,7 +123,9 @@ class InputBox(QWidget):
         self.input_field.setFocus(Qt.FocusReason.PopupFocusReason)
 
     def hide_input(self):
-        self.hide()
+        if self.isVisible():
+            self.hide()
+            self.closed.emit()
 
     def _on_send(self):
         text = self.input_field.text().strip()

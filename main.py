@@ -245,6 +245,7 @@ class App:
         if self.input_box is None:
             self.input_box = InputBox(theme=self.config.theme)
             self.input_box.message_sent.connect(self.send_message)
+            self.input_box.closed.connect(lambda: self.overlay.set_click_through(True))
 
         # Make sure the overlay doesn't swallow focus/keystrokes
         self.overlay.set_click_through(False)
