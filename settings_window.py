@@ -37,10 +37,13 @@ class SettingsDialog(QDialog):
         self.setWindowTitle("弹幕鱼排 - 设置")
         self.setFixedWidth(380)
         self.setWindowFlags(
-            Qt.WindowType.Dialog
-            | Qt.WindowType.WindowCloseButtonHint
-            | Qt.WindowType.WindowTitleHint
+            Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
+            | Qt.WindowType.Tool
         )
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+
+        self._drag_pos = None
 
         self._apply_theme()
         self._build_ui()
@@ -472,10 +475,10 @@ class SettingsDialog(QDialog):
         layout.addWidget(self._section_label("全局快捷键"))
         layout.addWidget(self._field_label("打开输入框快捷键"))
         self.input_hotkey = QLineEdit()
-        self.input_hotkey.setPlaceholderText("例如: ctrl+enter")
+        self.input_hotkey.setPlaceholderText("例如: ctrl+shift+enter")
         layout.addWidget(self.input_hotkey)
 
-        hint = QLabel("按下快捷键可在任何位置打开消息输入框，输入文字后按 Enter 发送到聊天室，按 Esc 关闭。")
+        hint = QLabel("按下快捷键可在任何位置打开消息输入框。如果设置后无效，说明该组合键已被其他程序占用，请换一个。输入文字后按 Enter 发送，按 Esc 关闭。")
         hint.setWordWrap(True)
         hint.setStyleSheet("color: #8b949e; font-size: 11px; line-height: 1.6;")
         layout.addWidget(hint)
@@ -665,6 +668,27 @@ class SettingsDialog(QDialog):
         self.config = config
         self._apply_theme()
         self._populate_form()
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            # Only drag when clicking the header area (top 44 px)
+            if event.position().y() <= 44:
+                self._drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+                event.accept()
+                return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if event.buttons() == Qt.MouseButton.LeftButton and self._drag_pos is not None:
+            self.move(event.globalPosition().toPoint() - self._drag_pos)
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_pos = None
+        super().mouseReleaseEvent(event)
 
     def keyPressEvent(self, event):
         if self.input_hotkey.hasFocus() and self.input_hotkey.text() == "":

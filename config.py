@@ -88,7 +88,7 @@ class Display:
 class Config:
     account: Account = field(default_factory=Account)
     display: Display = field(default_factory=Display)
-    hotkey: str = "ctrl+enter"
+    hotkey: str = "ctrl+shift+enter"
     theme: str = "dark"                # dark | light
 
 
@@ -145,7 +145,7 @@ def config_from_dict(d: dict) -> Config:
         danmu_opacity=disp.get("danmuOpacity", 100),
         font_size=disp.get("fontSize", 24),
     )
-    cfg.hotkey = d.get("hotkey", "ctrl+enter")
+    cfg.hotkey = d.get("hotkey", "ctrl+shift+enter")
     cfg.theme = d.get("theme", "dark")
     return cfg
 

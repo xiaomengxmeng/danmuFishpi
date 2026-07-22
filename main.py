@@ -103,7 +103,26 @@ class App:
         self.hotkey_mgr = HotkeyManager()
         self.hotkey_mgr.install_filter()
         if self.config.hotkey:
-            self.hotkey_mgr.register(self.config.hotkey, self.show_input_box)
+            old_hotkey = self.config.hotkey
+            if not self.hotkey_mgr.register(old_hotkey, self.show_input_box):
+                # Fallback to ctrl+shift+enter if the configured hotkey is taken
+                fallback = "ctrl+shift+enter"
+                if self.hotkey_mgr.register(fallback, self.show_input_box):
+                    self.config.hotkey = fallback
+                    config.save(self.config)
+                    self.tray.tray_icon.showMessage(
+                        "弹幕鱼排",
+                        f"快捷键 '{old_hotkey}' 被占用，已自动切换为 '{fallback}'。",
+                        QSystemTrayIcon.MessageIcon.Information,
+                        5000,
+                    )
+                else:
+                    self.tray.tray_icon.showMessage(
+                        "弹幕鱼排",
+                        f"快捷键 '{old_hotkey}' 注册失败，可能已被其他程序占用。\n请在设置中更换。",
+                        QSystemTrayIcon.MessageIcon.Warning,
+                        5000,
+                    )
 
         # Settings dialog (created lazily)
         self.settings_dialog = None

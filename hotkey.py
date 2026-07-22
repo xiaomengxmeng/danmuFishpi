@@ -36,9 +36,15 @@ class NativeHotkeyFilter(QObject, QAbstractNativeEventFilter):
     triggered = pyqtSignal()
 
     def nativeEventFilter(self, event_type, message):
-        if event_type == "windows_generic_MSG":
-            msg = ctypes.cast(message.__int__(), ctypes.POINTER(wintypes.MSG)).contents
+        et = event_type.toString() if hasattr(event_type, "toString") else str(event_type)
+        # Only log non-timer messages to avoid spam
+        if et != "windows_timer_MSG":
+            logger.debug(f"nativeEventFilter event_type={et}")
+        if et in ("windows_generic_MSG", "windows_dispatcher_MSG"):
+            msg_ptr = ctypes.cast(int(message), ctypes.POINTER(wintypes.MSG))
+            msg = msg_ptr.contents
             if msg.message == WM_HOTKEY:
+                logger.info(f"WM_HOTKEY received (id={msg.wParam})")
                 self.triggered.emit()
                 return True, 0
         return False, 0
@@ -149,6 +155,7 @@ class HotkeyManager(QObject):
             app.installNativeEventFilter(self._filter)
 
     def _on_triggered(self):
+        logger.info("Hotkey triggered, invoking callback")
         if self._callback:
             try:
                 self._callback()
