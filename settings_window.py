@@ -575,7 +575,7 @@ class SettingsDialog(QDialog):
         row.setSpacing(4)
         header = QHBoxLayout()
         lbl_name = QLabel(label_text)
-        lbl_name.setStyleSheet("font-size: 12px;")
+        lbl_name.setProperty("class", "fieldLabel")  # inherit theme color
         lbl_value = QLabel(f"{val}{suffix}")
         lbl_value.setStyleSheet("color: #58a6ff; font-size: 12px;")
         header.addWidget(lbl_name)

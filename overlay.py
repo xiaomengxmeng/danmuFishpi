@@ -111,9 +111,24 @@ class DanmuOverlay(QWidget):
         self._image_cache = ImageCache(self)
         self._image_cache.loaded.connect(self._on_image_loaded)
 
+        # Animation clock for GIF playback (starts when first animated image loads)
+        self._anim_clock = QElapsedTimer()
+        self._anim_clock_started = False
+        self._has_animated_content = False  # True when any visible GIF is playing
+
+    def _start_anim_clock(self) -> None:
+        """Lazily start the animation clock on first GIF load."""
+        if not self._anim_clock_started:
+            self._anim_clock.start()
+            self._anim_clock_started = True
+
     def _on_image_loaded(self, url: str) -> None:
         """Invalidate scrolling pixmap cache when any image finishes loading."""
         self._pixmaps.clear()
+        # If the new image is a GIF, start the animation clock
+        if self._image_cache.is_animated(url):
+            self._start_anim_clock()
+            self._has_animated_content = True
         self.update()
 
     def update_config(self, display_config: dict, theme: str) -> None:
@@ -127,6 +142,7 @@ class DanmuOverlay(QWidget):
         self.show_outline = display_config.get("showOutline", True)
         # Clear pixmap cache (font/size changed)
         self._pixmaps.clear()
+        self._has_animated_content = False
         self.update()
 
     def set_click_through(self, enable: bool) -> None:
@@ -261,7 +277,12 @@ class DanmuOverlay(QWidget):
         return risk
 
     def _tick(self) -> None:
-        """Animation tick: update positions and request repaint."""
+        """Animation tick: update positions and request repaint.
+
+        When animated GIF content is present the pixmap cache for those items
+        is skipped and the render loop must continue even when no scrolling
+        items are moving (e.g. floating/bottom mode) so frames advance.
+        """
         if not self.isVisible() or not self.visible_flag:
             return
 
@@ -278,7 +299,8 @@ class DanmuOverlay(QWidget):
         if self.engine.mode == "scrolling":
             self.engine.update_scrolling()
 
-        # Trigger repaint
+        # Always trigger repaint when animated content is present
+        # so GIF frames advance smoothly.
         self.update()
 
     def paintEvent(self, event):
@@ -307,7 +329,11 @@ class DanmuOverlay(QWidget):
             painter.end()
 
     def _measure_item_width(self, item: DanmuItem) -> float:
-        """Measure total width of a danmu item (avatar + nickname + content)."""
+        """Measure total width of a danmu item (avatar + nickname + content).
+
+        For multi-line text the width is determined by the longest line,
+        which is already limited by max_width (0.6 * container).
+        """
         w = 16  # padding
 
         if self._effective_show_avatar() and item.nickname:
@@ -318,14 +344,25 @@ class DanmuOverlay(QWidget):
             w += self.font_metrics.horizontalAdvance(nick)
             w += 8  # gap
 
-        # Content width (strip HTML for measurement)
+        # Content width: strip HTML, then use the longest line after wrapping
+        # (capped to max_width, same as _get_item_pixmap)
         content = self._strip_html(item.content)
         if item.has_image and not self._effective_show_image():
             content = "[图片] " + content
-        w += self.font_metrics.horizontalAdvance(content)
+
+        max_width = int(self.engine.container_width * 0.6)
+        prefix_w = w
+        available_text_w = max(100, max_width - prefix_w)
+        text_lines = self._wrap_text(content, self.font_metrics, available_text_w)
+        longest_line_w = max(
+            (self.font_metrics.horizontalAdvance(line) for line in text_lines),
+            default=0,
+        )
+        w = prefix_w + longest_line_w
+
         # Add extra safety margin for outline/antialiasing so the last
         # character is not clipped.
-        return w + 24  # padding + outline safety margin
+        return min(w + 24, max_width + 24)  # padding + outline safety margin
 
     def _strip_html(self, text: str) -> str:
         """Strip HTML tags for text measurement."""
@@ -336,41 +373,41 @@ class DanmuOverlay(QWidget):
                    max_lines: int | None = None) -> list[str]:
         """Wrap text into visual lines, preserving explicit newlines.
 
-        Uses Qt's word wrap. Hard line breaks (\\n) are kept as separate lines.
+        Uses Qt's word+anywhere wrap so long unbroken strings (code, URLs)
+        are also broken.  Hard line breaks (\\n) are kept as separate lines.
         """
         if not text:
             return [""]
 
-        flags = Qt.TextFlag.TextWordWrap
-        rect = fm.boundingRect(QRect(0, 0, max_width, 100000), flags, text)
+        flags = Qt.TextFlag.TextWordWrap | Qt.TextFlag.TextWrapAnywhere
         line_h = fm.height()
         raw_lines = []
 
-        # Qt's boundingRect gives total height; derive line count and extract lines
-        # For accurate measurement we let Qt do the wrapping by using elidedText or
-        # manually walking the text. Simpler approach: split on \n first, then wrap each.
         for hard_line in text.split("\n"):
             if not hard_line:
                 raw_lines.append("")
                 continue
+            # Measure the number of visual lines Qt thinks this needs.
             br = fm.boundingRect(QRect(0, 0, max_width, 100000), flags, hard_line)
             line_count = max(1, (br.height() + line_h - 1) // line_h)
             if line_count == 1:
                 raw_lines.append(hard_line)
             else:
-                # Approximate wrapping by slicing characters. This is not perfect for
-                # variable-width fonts but sufficient for our use case.
-                chars_per_line = max(1, len(hard_line) // line_count)
+                # Walk forward measuring substrings until we exceed max_width.
                 start = 0
                 while start < len(hard_line):
-                    segment = hard_line[start:start + chars_per_line]
-                    while (fm.horizontalAdvance(segment) < max_width
-                           and start + len(segment) < len(hard_line)
-                           and len(segment) < len(hard_line)):
-                        segment = hard_line[start:start + len(segment) + 1]
-                        if fm.horizontalAdvance(segment) > max_width:
-                            segment = segment[:-1]
-                            break
+                    # Binary search for the longest prefix that fits.
+                    lo, hi = 1, min(len(hard_line) - start, 500)
+                    best = 1
+                    while lo <= hi:
+                        mid = (lo + hi) // 2
+                        seg = hard_line[start:start + mid]
+                        if fm.horizontalAdvance(seg) <= max_width:
+                            best = mid
+                            lo = mid + 1
+                        else:
+                            hi = mid - 1
+                    segment = hard_line[start:start + best]
                     if not segment:
                         segment = hard_line[start:start + 1]
                     raw_lines.append(segment)
@@ -408,8 +445,15 @@ class DanmuOverlay(QWidget):
 
     def _draw_avatar(self, painter: QPainter, x: float, y: float, size: int,
                      nickname: str, avatar_url: str = "") -> None:
-        """Draw a circular avatar. Uses cached image if available, else placeholder."""
-        pm = self._image_cache.get(avatar_url) if avatar_url else None
+        """Draw a circular avatar. Uses cached image if available, else placeholder.
+
+        For animated GIFs the current frame is drawn (loops forever).
+        """
+        pm = None
+        if avatar_url and self._image_cache.is_animated(avatar_url) and self._anim_clock_started:
+            pm = self._image_cache.current_frame(avatar_url, self._anim_clock.elapsed())
+        elif avatar_url:
+            pm = self._image_cache.get(avatar_url)
 
         if pm and not pm.isNull():
             # Clip to circle and draw scaled image
@@ -473,8 +517,16 @@ class DanmuOverlay(QWidget):
 
     def _draw_inline_image(self, painter: QPainter, x: float, y: float,
                            url: str, max_size: int) -> tuple[int, int]:
-        """Draw a scaled inline image. Returns actual (width, height)."""
-        pm = self._image_cache.get(url)
+        """Draw a scaled inline image. Returns actual (width, height).
+
+        For animated GIFs the current frame is drawn (loops forever).
+        """
+        pm = None
+        if self._image_cache.is_animated(url) and self._anim_clock_started:
+            pm = self._image_cache.current_frame(url, self._anim_clock.elapsed())
+        else:
+            pm = self._image_cache.get(url)
+
         if not pm or pm.isNull():
             # Placeholder while loading
             painter.setPen(QPen(self.theme["card_border"]))
@@ -500,10 +552,27 @@ class DanmuOverlay(QWidget):
         return dst_w, dst_h
 
     def _get_item_pixmap(self, item: DanmuItem) -> QPixmap:
-        """Get or create a pre-rendered pixmap for a scrolling item."""
-        item_id = id(item)
-        if item_id in self._pixmaps:
-            return self._pixmaps[item_id]
+        """Get or create a pre-rendered pixmap for a scrolling item.
+
+        Items containing animated GIFs are NOT cached — they are redrawn every
+        frame so the GIF animation plays. The pixmap cache is skipped for them.
+        """
+        # Parse text and images first to detect animated content
+        text, img_urls = self._parse_content(item.content)
+        show_images = self._effective_show_image() and item.has_image and img_urls
+
+        has_gif = False
+        if show_images:
+            for url in img_urls[:3]:
+                if self._image_cache.is_animated(url):
+                    has_gif = True
+                    break
+
+        # Don't cache items with animated GIFs — they need per-frame redraw
+        if not has_gif:
+            item_id = id(item)
+            if item_id in self._pixmaps:
+                return self._pixmaps[item_id]
 
         max_width = int(self.engine.container_width * 0.6)
         avatar_size = int(self.engine.font_size * 1.4)
@@ -511,11 +580,6 @@ class DanmuOverlay(QWidget):
         line_gap = 4
         image_max_h = 80
         image_gap = 6
-        max_text_lines = 2
-
-        # Parse text and images
-        text, img_urls = self._parse_content(item.content)
-        show_images = self._effective_show_image() and item.has_image and img_urls
 
         if item.has_image and not self._effective_show_image():
             text = "[图片] " + text
@@ -529,9 +593,10 @@ class DanmuOverlay(QWidget):
             nick_text = item.nickname + ": "
             prefix_w += self.font_metrics.horizontalAdvance(nick_text) + 8
 
-        # Text layout with preserved line breaks
+        # Text layout with preserved line breaks — no line limit for scrolling mode,
+        # so long messages auto-wrap across as many lines as needed.
         available_text_w = max(100, max_width - prefix_w - padding * 2)
-        text_lines = self._wrap_text(text, self.font_metrics, available_text_w, max_text_lines)
+        text_lines = self._wrap_text(text, self.font_metrics, available_text_w)
         text_height = len(text_lines) * self.font_metrics.height() + (len(text_lines) - 1) * line_gap + 10
 
         longest_line_w = max(
@@ -568,6 +633,10 @@ class DanmuOverlay(QWidget):
 
         if width <= 0 or height <= 0:
             return QPixmap()
+
+        # Update item dimensions
+        item.width = width
+        item.height = height
 
         dpr = self.devicePixelRatio()
         target_pm = QPixmap(int(width * dpr), int(height * dpr))
@@ -621,9 +690,9 @@ class DanmuOverlay(QWidget):
         finally:
             p.end()
 
-        item.width = width
-        item.height = height
-        self._pixmaps[item_id] = target_pm
+        # Only cache non-animated items
+        if not has_gif:
+            self._pixmaps[id(item)] = target_pm
         return target_pm
 
     def _draw_text_wrapped(self, painter: QPainter, text: str,
@@ -944,6 +1013,7 @@ class DanmuOverlay(QWidget):
         """Clear all danmu."""
         self.engine.clear_all()
         self._pixmaps.clear()
+        self._has_animated_content = False
         self.update()
 
     def resizeEvent(self, event):

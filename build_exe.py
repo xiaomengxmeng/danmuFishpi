@@ -22,6 +22,7 @@ def main():
         "--hidden-import", "PyQt6.QtCore",
         "--hidden-import", "PyQt6.QtGui",
         "--hidden-import", "PyQt6.QtWidgets",
+        "--hidden-import", "PyQt6.QtNetwork",
         "--hidden-import", "websocket",
         "--hidden-import", "httpx",
         "--hidden-import", "certifi",
