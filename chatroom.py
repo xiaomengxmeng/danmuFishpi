@@ -23,7 +23,7 @@ USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko)"
 )
-CLIENT_VERSION = "Python/v1.0.0"
+CLIENT_VERSION = "小梦的科技/v1.0.0"
 
 
 class Connection:

@@ -430,10 +430,14 @@ class SettingsDialog(QDialog):
         self.chk_nickname = QCheckBox("昵称")
         self.chk_image = QCheckBox("图片")
         self.chk_red_packet = QCheckBox("红包")
+        self.chk_sound = QCheckBox("提示声")
+        self.chk_outline = QCheckBox("文字描边")
         options_layout.addWidget(self.chk_avatar)
         options_layout.addWidget(self.chk_nickname)
         options_layout.addWidget(self.chk_image)
         options_layout.addWidget(self.chk_red_packet)
+        options_layout.addWidget(self.chk_sound)
+        options_layout.addWidget(self.chk_outline)
         layout.addLayout(options_layout)
 
         # Area
@@ -494,6 +498,8 @@ class SettingsDialog(QDialog):
         self.chk_nickname.stateChanged.connect(self._emit_config_save)
         self.chk_image.stateChanged.connect(self._emit_config_save)
         self.chk_red_packet.stateChanged.connect(self._emit_config_save)
+        self.chk_sound.stateChanged.connect(self._emit_config_save)
+        self.chk_outline.stateChanged.connect(self._emit_config_save)
         self.combo_area.currentIndexChanged.connect(self._emit_config_save)
         self.combo_font.currentTextChanged.connect(self._emit_config_save)
         self.slider_speed.valueChanged.connect(self._emit_config_save)
@@ -586,7 +592,10 @@ class SettingsDialog(QDialog):
         self.chk_nickname.setChecked(self.config.display.show_nickname)
         self.chk_image.setChecked(self.config.display.show_image)
         self.chk_red_packet.setChecked(self.config.display.show_red_packet)
+        self.chk_sound.setChecked(self.config.display.play_sound)
+        self.chk_outline.setChecked(self.config.display.show_outline)
 
+        self.slider_speed.setValue(self.config.display.danmu_speed)
         area_map = {"fullscreen": 0, "topHalf": 1, "bottomHalf": 2}
         self.combo_area.setCurrentIndex(area_map.get(self.config.display.danmu_area, 0))
 
@@ -697,6 +706,8 @@ class SettingsDialog(QDialog):
             "showNickname": self.chk_nickname.isChecked(),
             "showImage": self.chk_image.isChecked(),
             "showRedPacket": self.chk_red_packet.isChecked(),
+            "playSound": self.chk_sound.isChecked(),
+            "showOutline": self.chk_outline.isChecked(),
             "blockedUserIds": blocked_ids,
             "followedUserIds": followed_ids,
             "danmuSpeed": self.slider_speed.value(),

@@ -18,7 +18,6 @@ from auth import login as auth_login
 from chatroom import Connection as ChatroomConnection
 from danmu_engine import DanmuEngine
 from overlay import DanmuOverlay
-import overlay as overlay_module
 from tray import Tray
 from hotkey import HotkeyManager
 from settings_window import SettingsDialog
@@ -71,8 +70,22 @@ class App:
         })
 
         self.overlay = DanmuOverlay(self.engine)
-        # Set theme on overlay
-        self.overlay.theme = overlay_module.THEME_LIGHT if self.config.theme == "light" else overlay_module.THEME_DARK
+        # Set theme and outline config on overlay
+        self.overlay.update_config({
+            "danmuMode": "scrolling",
+            "showAvatar": self.config.display.show_avatar,
+            "showNickname": self.config.display.show_nickname,
+            "showImage": self.config.display.show_image,
+            "showRedPacket": self.config.display.show_red_packet,
+            "showOutline": self.config.display.show_outline,
+            "danmuSpeed": self.config.display.danmu_speed,
+            "danmuArea": self.config.display.danmu_area,
+            "danmuWidth": self.config.display.danmu_width,
+            "danmuHeight": self.config.display.danmu_height,
+            "danmuOpacity": self.config.display.danmu_opacity,
+            "fontSize": self.config.display.font_size,
+            "fontFamily": self.config.display.font_family,
+        }, self.config.theme)
 
         # Show overlay on the available screen area (excluding taskbar)
         screen = self.app.primaryScreen().availableGeometry()
@@ -154,7 +167,8 @@ class App:
             return
 
         # Special follow notification
-        if user_id and user_id in self.config.display.followed_user_ids:
+        if (user_id and user_id in self.config.display.followed_user_ids
+                and self.config.display.play_sound):
             self.tray.show_message(
                 "特别关注",
                 f"{msg.get('nickname', user_id)}: {msg.get('content', '')[:60]}",
@@ -265,6 +279,7 @@ class App:
 
     def show_input_box(self) -> None:
         """Show the floating message input box (bound to global hotkey)."""
+        print("[danmuFishpi] 显示输入框", flush=True)
         if self.input_box is None:
             self.input_box = InputBox(theme=self.config.theme)
             self.input_box.message_sent.connect(self.send_message)
@@ -347,6 +362,8 @@ class App:
         self.config.display.show_nickname = display_config.get("showNickname", self.config.display.show_nickname)
         self.config.display.show_image = display_config.get("showImage", self.config.display.show_image)
         self.config.display.show_red_packet = display_config.get("showRedPacket", self.config.display.show_red_packet)
+        self.config.display.play_sound = display_config.get("playSound", self.config.display.play_sound)
+        self.config.display.show_outline = display_config.get("showOutline", self.config.display.show_outline)
         self.config.display.blocked_user_ids = display_config.get("blockedUserIds", self.config.display.blocked_user_ids)
         self.config.display.followed_user_ids = display_config.get("followedUserIds", self.config.display.followed_user_ids)
         self.config.display.danmu_speed = display_config.get("danmuSpeed", self.config.display.danmu_speed)
@@ -386,6 +403,8 @@ class App:
             "showAvatar": self.config.display.show_avatar,
             "showNickname": self.config.display.show_nickname,
             "showImage": self.config.display.show_image,
+            "showRedPacket": self.config.display.show_red_packet,
+            "showOutline": self.config.display.show_outline,
             "danmuSpeed": self.config.display.danmu_speed,
             "danmuArea": self.config.display.danmu_area,
             "danmuWidth": self.config.display.danmu_width,

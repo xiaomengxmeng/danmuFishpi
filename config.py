@@ -79,6 +79,8 @@ class Display:
     show_red_packet: bool = True
     blocked_user_ids: list[str] = field(default_factory=list)
     followed_user_ids: list[str] = field(default_factory=list)
+    play_sound: bool = False           # notification sound for special follows
+    show_outline: bool = True          # text outline on danmu
     danmu_speed: int = 5               # 1-10
     danmu_area: str = "fullscreen"     # fullscreen | topHalf | bottomHalf
     danmu_width: int = 100             # 30-100 percentage
@@ -121,6 +123,8 @@ def config_to_dict(cfg: Config) -> dict:
         "showRedPacket": disp["show_red_packet"],
         "blockedUserIds": disp["blocked_user_ids"],
         "followedUserIds": disp["followed_user_ids"],
+        "playSound": disp["play_sound"],
+        "showOutline": disp["show_outline"],
         "danmuSpeed": disp["danmu_speed"],
         "danmuArea": disp["danmu_area"],
         "danmuWidth": disp["danmu_width"],
@@ -149,6 +153,8 @@ def config_from_dict(d: dict) -> Config:
         show_red_packet=disp.get("showRedPacket", True),
         blocked_user_ids=disp.get("blockedUserIds", []),
         followed_user_ids=disp.get("followedUserIds", []),
+        play_sound=disp.get("playSound", False),
+        show_outline=disp.get("showOutline", True),
         danmu_speed=disp.get("danmuSpeed", 5),
         danmu_area=disp.get("danmuArea", "fullscreen"),
         danmu_width=disp.get("danmuWidth", 100),

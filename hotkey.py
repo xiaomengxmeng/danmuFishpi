@@ -156,8 +156,10 @@ class HotkeyManager(QObject):
 
     def _on_triggered(self):
         logger.info("Hotkey triggered, invoking callback")
+        print(f"[danmuFishpi] 热键触发: {self._current_hotkey}", flush=True)
         if self._callback:
             try:
                 self._callback()
             except Exception as e:
                 logger.error(f"Hotkey callback error: {e}")
+                print(f"[danmuFishpi] 热键回调错误: {e}", flush=True)

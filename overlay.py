@@ -103,6 +103,7 @@ class DanmuOverlay(QWidget):
         self.theme = THEME_DARK
         self.click_through = True
         self.visible_flag = True  # Toggle danmu visibility
+        self.show_outline = True  # Text outline effect
 
         # Animation timer
         self.timer = QTimer(self)
@@ -133,6 +134,7 @@ class DanmuOverlay(QWidget):
         self.font.setBold(True)
         self.font_metrics = QFontMetrics(self.font)
         self.theme = THEME_LIGHT if theme == "light" else THEME_DARK
+        self.show_outline = display_config.get("showOutline", True)
         # Clear pixmap cache (font/size changed)
         self._pixmaps.clear()
         self.update()
@@ -312,15 +314,16 @@ class DanmuOverlay(QWidget):
         fm = font_metrics or self.font_metrics
         line_h = fm.height()
         pen = QPen(color)
-        outline_pen = QPen(self.theme["outline"])
-        outline_pen.setWidth(2)
         cur_y = y
         for line in lines:
-            # Draw outline
-            painter.setPen(outline_pen)
-            for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1),
-                           (-1, -1), (1, 1), (-1, 1), (1, -1)]:
-                painter.drawText(int(x + dx), int(cur_y + dy), line)
+            if self.show_outline:
+                # Draw outline
+                outline_pen = QPen(self.theme["outline"])
+                outline_pen.setWidth(1)
+                painter.setPen(outline_pen)
+                for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1),
+                               (-1, -1), (1, 1), (-1, 1), (1, -1)]:
+                    painter.drawText(int(x + dx), int(cur_y + dy), line)
             # Draw text
             painter.setPen(pen)
             painter.drawText(int(x), int(cur_y), line)
@@ -567,13 +570,14 @@ class DanmuOverlay(QWidget):
     def _draw_text_with_outline(self, painter: QPainter, text: str,
                                  x: int, y: int, color: QColor) -> None:
         """Draw text with a dark outline for readability on any background."""
-        outline_pen = QPen(self.theme["outline"])
-        outline_pen.setWidth(3)
-        painter.setPen(outline_pen)
-        # Draw outline by offsetting text in 8 directions
-        for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1),
-                       (-1, -1), (1, 1), (-1, 1), (1, -1)]:
-            painter.drawText(x + dx, y + dy, text)
+        if self.show_outline:
+            outline_pen = QPen(self.theme["outline"])
+            outline_pen.setWidth(2)
+            painter.setPen(outline_pen)
+            # Draw outline by offsetting text in 8 directions
+            for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1),
+                           (-1, -1), (1, 1), (-1, 1), (1, -1)]:
+                painter.drawText(x + dx, y + dy, text)
         # Draw main text
         painter.setPen(QPen(color))
         painter.drawText(x, y, text)
