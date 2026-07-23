@@ -38,6 +38,7 @@ _SetWindowLongW = _user32.SetWindowLongW
 THEME_DARK = {
     "text": QColor(230, 237, 243),       # #e6edf3
     "nickname": QColor(88, 166, 255),    # #58a6ff
+    "red_packet": QColor(255, 107, 107), # #ff6b6b
     "card_bg": QColor(13, 17, 23, 235),  # rgba(13,17,23,0.92)
     "card_border": QColor(48, 54, 61),   # #30363d
     "outline": QColor(0, 0, 0, 200),
@@ -46,6 +47,7 @@ THEME_DARK = {
 THEME_LIGHT = {
     "text": QColor(31, 35, 40),          # #1f2328
     "nickname": QColor(9, 105, 218),     # #0969da
+    "red_packet": QColor(218, 54, 51),   # #da3633
     "card_bg": QColor(255, 255, 255, 235),
     "card_border": QColor(208, 215, 222),
     "outline": QColor(255, 255, 255, 200),
@@ -518,7 +520,8 @@ class DanmuOverlay(QWidget):
                 text_x += self.font_metrics.horizontalAdvance(nick_text) + 8
 
             # Draw content (preserving hard line breaks)
-            self._draw_text_block(p, text_lines, text_x, text_y, self.theme["text"])
+            text_color = self.theme["red_packet"] if item.is_red_packet else self.theme["text"]
+            self._draw_text_block(p, text_lines, text_x, text_y, text_color)
 
             # Draw images below text
             if show_images:
@@ -715,7 +718,8 @@ class DanmuOverlay(QWidget):
         text_y += nick_h + line_gap
         painter.setPen(QPen(self.theme["text"]))
         painter.setFont(content_font)
-        self._draw_text_block(painter, content_lines, text_x, text_y, self.theme["text"], content_fm)
+        content_color = self.theme["red_packet"] if item.is_red_packet else self.theme["text"]
+        self._draw_text_block(painter, content_lines, text_x, text_y, content_color, content_fm)
 
         # Draw images below text
         if show_images:
@@ -817,7 +821,8 @@ class DanmuOverlay(QWidget):
         text_y += nick_h + 2
         painter.setPen(QPen(self.theme["text"]))
         painter.setFont(content_font)
-        self._draw_text_block(painter, content_lines, text_x, text_y, self.theme["text"], content_fm)
+        content_color = self.theme["red_packet"] if item.is_red_packet else self.theme["text"]
+        self._draw_text_block(painter, content_lines, text_x, text_y, content_color, content_fm)
 
         # Draw images below text
         if show_images:

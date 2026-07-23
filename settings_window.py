@@ -421,9 +421,11 @@ class SettingsDialog(QDialog):
         self.chk_avatar = QCheckBox("头像")
         self.chk_nickname = QCheckBox("昵称")
         self.chk_image = QCheckBox("图片")
+        self.chk_red_packet = QCheckBox("红包")
         options_layout.addWidget(self.chk_avatar)
         options_layout.addWidget(self.chk_nickname)
         options_layout.addWidget(self.chk_image)
+        options_layout.addWidget(self.chk_red_packet)
         layout.addLayout(options_layout)
 
         # Area
@@ -471,6 +473,7 @@ class SettingsDialog(QDialog):
         self.chk_avatar.stateChanged.connect(self._emit_config_save)
         self.chk_nickname.stateChanged.connect(self._emit_config_save)
         self.chk_image.stateChanged.connect(self._emit_config_save)
+        self.chk_red_packet.stateChanged.connect(self._emit_config_save)
         self.combo_area.currentIndexChanged.connect(self._emit_config_save)
         self.combo_font.currentTextChanged.connect(self._emit_config_save)
         self.slider_speed.valueChanged.connect(self._emit_config_save)
@@ -565,6 +568,7 @@ class SettingsDialog(QDialog):
         self.chk_avatar.setChecked(self.config.display.show_avatar)
         self.chk_nickname.setChecked(self.config.display.show_nickname)
         self.chk_image.setChecked(self.config.display.show_image)
+        self.chk_red_packet.setChecked(self.config.display.show_red_packet)
 
         area_map = {"fullscreen": 0, "topHalf": 1, "bottomHalf": 2}
         self.combo_area.setCurrentIndex(area_map.get(self.config.display.danmu_area, 0))
@@ -632,6 +636,7 @@ class SettingsDialog(QDialog):
             "showAvatar": self.chk_avatar.isChecked(),
             "showNickname": self.chk_nickname.isChecked(),
             "showImage": self.chk_image.isChecked(),
+            "showRedPacket": self.chk_red_packet.isChecked(),
             "danmuSpeed": self.slider_speed.value(),
             "danmuArea": area,
             "danmuWidth": self.slider_width.value(),

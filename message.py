@@ -54,6 +54,43 @@ def should_display(msg_type: str) -> bool:
     return msg_type == "msg"
 
 
+def _format_red_packet(content: str) -> tuple[str, bool]:
+    """Detect red-packet JSON and return a human-readable text plus a flag.
+
+    Returns (formatted_content, is_red_packet).
+    """
+    import json
+
+    stripped = content.strip()
+    if not stripped.startswith("{"):
+        return content, False
+
+    try:
+        data = json.loads(stripped)
+    except json.JSONDecodeError:
+        return content, False
+
+    msg_type = data.get("msgType")
+    if msg_type != "redPacket":
+        return content, False
+
+    msg = data.get("msg", "")
+    count = data.get("count", 0)
+    packet_type = data.get("type", "random")
+    type_label = "拼手气红包" if packet_type == "random" else "普通红包"
+
+    if msg and count:
+        formatted = f"🧧 {msg} [{type_label} {count}]"
+    elif msg:
+        formatted = f"🧧 {msg} [{type_label}]"
+    elif count:
+        formatted = f"🧧 {type_label} {count}"
+    else:
+        formatted = "🧧 [红包]"
+
+    return formatted, True
+
+
 def process_message(raw_msg: dict) -> dict | None:
     """Process a raw chatroom message dict into a display message.
 
@@ -66,6 +103,9 @@ def process_message(raw_msg: dict) -> dict | None:
     content = raw_msg.get("content", "")
     cleaned = clean_html(content)
 
+    # Detect and format red-packet messages
+    cleaned, is_red_packet = _format_red_packet(cleaned)
+
     nickname = raw_msg.get("userNickname", "")
     if not nickname:
         nickname = raw_msg.get("userName", "")
@@ -75,4 +115,5 @@ def process_message(raw_msg: dict) -> dict | None:
         "avatar_url": raw_msg.get("userAvatarURL48", ""),
         "content": cleaned,
         "has_image": "<img" in cleaned,
+        "is_red_packet": is_red_packet,
     }

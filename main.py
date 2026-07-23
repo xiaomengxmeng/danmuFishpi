@@ -74,8 +74,8 @@ class App:
         # Set theme on overlay
         self.overlay.theme = overlay_module.THEME_LIGHT if self.config.theme == "light" else overlay_module.THEME_DARK
 
-        # Set overlay to fullscreen
-        screen = self.app.primaryScreen().geometry()
+        # Show overlay on the available screen area (excluding taskbar)
+        screen = self.app.primaryScreen().availableGeometry()
         self.overlay.setGeometry(screen)
         self.engine.set_container_size(
             float(screen.width()), float(screen.height()))
@@ -143,6 +143,8 @@ class App:
 
     def _on_new_message(self, msg: dict) -> None:
         """Handle a new chatroom message (called on main thread)."""
+        if msg.get("is_red_packet") and not self.config.display.show_red_packet:
+            return
         self.overlay.add_message(msg)
 
     def _on_login_result(self, success: bool, api_key: str, error: str) -> None:
@@ -329,6 +331,7 @@ class App:
         self.config.display.show_avatar = display_config.get("showAvatar", self.config.display.show_avatar)
         self.config.display.show_nickname = display_config.get("showNickname", self.config.display.show_nickname)
         self.config.display.show_image = display_config.get("showImage", self.config.display.show_image)
+        self.config.display.show_red_packet = display_config.get("showRedPacket", self.config.display.show_red_packet)
         self.config.display.danmu_speed = display_config.get("danmuSpeed", self.config.display.danmu_speed)
         self.config.display.danmu_area = display_config.get("danmuArea", self.config.display.danmu_area)
         self.config.display.danmu_width = display_config.get("danmuWidth", self.config.display.danmu_width)

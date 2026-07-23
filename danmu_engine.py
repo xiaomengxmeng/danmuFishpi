@@ -18,6 +18,7 @@ class DanmuItem:
     avatar_url: str
     content: str          # May contain HTML (e.g. <img> tags)
     has_image: bool
+    is_red_packet: bool = False
 
     # Scrolling mode fields
     track_index: int = -1
@@ -138,6 +139,7 @@ class DanmuEngine:
             avatar_url=msg.get("avatar_url", ""),
             content=msg.get("content", ""),
             has_image=msg.get("has_image", False),
+            is_red_packet=msg.get("is_red_packet", False),
             add_time=time.time(),
         )
 
