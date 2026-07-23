@@ -122,7 +122,9 @@ class NotificationManager:
             for p in self._active[-self._max_visible:]:
                 y += p.height() + self._gap
             popup.show_at(QPoint(x, y))
-            popup.destroyed.connect(lambda: self._remove(popup))
+            # Capture popup and manager by default arg to avoid closure issues
+            # after the popup is destroyed.
+            popup.destroyed.connect(lambda _p=popup, _mgr=self: _mgr._remove(_p))
             self._active.append(popup)
             # Keep only max visible + a small queue
             if len(self._active) > self._max_visible + 2:
