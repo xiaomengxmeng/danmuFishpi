@@ -57,7 +57,7 @@ class App:
         # Create danmu engine and overlay
         self.engine = DanmuEngine()
         self.engine.update_config({
-            "danmuMode": self.config.display.danmu_mode,
+            "danmuMode": "scrolling",
             "showAvatar": self.config.display.show_avatar,
             "showNickname": self.config.display.show_nickname,
             "showImage": self.config.display.show_image,
@@ -89,12 +89,11 @@ class App:
         # Create system tray
         self.tray = Tray(self.app, self._create_icon(), {
             "on_show_settings": self.show_settings,
+            "on_show_input": self.show_input_box,
             "on_toggle_danmu": self.toggle_danmu,
-            "on_switch_mode": self.switch_mode,
             "on_switch_theme": self.switch_theme,
             "on_quit": self.quit,
         })
-        self.tray.set_mode_checked(self.config.display.danmu_mode)
         self.tray.set_theme_checked(self.config.theme)
 
         # Create input box (created lazily)
@@ -104,6 +103,7 @@ class App:
         self.hotkey_mgr = HotkeyManager()
         self.hotkey_mgr.install_filter()
         self._register_hotkey_with_fallback()
+        logger.info(f"Current global hotkey: {self.hotkey_mgr._current_hotkey or 'none'}")
 
         # Settings dialog (created lazily)
         self.settings_dialog = None
@@ -143,8 +143,23 @@ class App:
 
     def _on_new_message(self, msg: dict) -> None:
         """Handle a new chatroom message (called on main thread)."""
+        user_id = msg.get("user_id", "")
+
+        # Block list filter
+        if user_id and user_id in self.config.display.blocked_user_ids:
+            return
+
+        # Red packet filter
         if msg.get("is_red_packet") and not self.config.display.show_red_packet:
             return
+
+        # Special follow notification
+        if user_id and user_id in self.config.display.followed_user_ids:
+            self.tray.show_message(
+                "特别关注",
+                f"{msg.get('nickname', user_id)}: {msg.get('content', '')[:60]}",
+            )
+
         self.overlay.add_message(msg)
 
     def _on_login_result(self, success: bool, api_key: str, error: str) -> None:
@@ -327,11 +342,13 @@ class App:
 
     def _on_config_saved(self, display_config: dict) -> None:
         """Handle config save from settings dialog."""
-        self.config.display.danmu_mode = display_config.get("danmuMode", self.config.display.danmu_mode)
+        self.config.display.danmu_mode = "scrolling"
         self.config.display.show_avatar = display_config.get("showAvatar", self.config.display.show_avatar)
         self.config.display.show_nickname = display_config.get("showNickname", self.config.display.show_nickname)
         self.config.display.show_image = display_config.get("showImage", self.config.display.show_image)
         self.config.display.show_red_packet = display_config.get("showRedPacket", self.config.display.show_red_packet)
+        self.config.display.blocked_user_ids = display_config.get("blockedUserIds", self.config.display.blocked_user_ids)
+        self.config.display.followed_user_ids = display_config.get("followedUserIds", self.config.display.followed_user_ids)
         self.config.display.danmu_speed = display_config.get("danmuSpeed", self.config.display.danmu_speed)
         self.config.display.danmu_area = display_config.get("danmuArea", self.config.display.danmu_area)
         self.config.display.danmu_width = display_config.get("danmuWidth", self.config.display.danmu_width)
@@ -344,9 +361,6 @@ class App:
 
         # Update overlay
         self.overlay.update_config(display_config, self.config.theme)
-
-        # Update tray menu
-        self.tray.set_mode_checked(self.config.display.danmu_mode)
 
         # Update input box theme
         if self.input_box:
@@ -363,33 +377,12 @@ class App:
         """Toggle danmu visibility."""
         self.overlay.toggle_visibility()
 
-    def switch_mode(self, mode: str) -> None:
-        """Switch danmu mode."""
-        self.config.display.danmu_mode = mode
-        cfg_module.save(self.config, self.config_path)
-        self.overlay.update_config({
-            "danmuMode": mode,
-            "showAvatar": self.config.display.show_avatar,
-            "showNickname": self.config.display.show_nickname,
-            "showImage": self.config.display.show_image,
-            "danmuSpeed": self.config.display.danmu_speed,
-            "danmuArea": self.config.display.danmu_area,
-            "danmuWidth": self.config.display.danmu_width,
-            "danmuHeight": self.config.display.danmu_height,
-            "danmuOpacity": self.config.display.danmu_opacity,
-            "fontSize": self.config.display.font_size,
-            "fontFamily": self.config.display.font_family,
-        }, self.config.theme)
-        self.tray.set_mode_checked(mode)
-        if self.settings_dialog:
-            self.settings_dialog.update_config(self.config)
-
     def switch_theme(self, theme: str) -> None:
         """Switch theme."""
         self.config.theme = theme
         cfg_module.save(self.config, self.config_path)
         self.overlay.update_config({
-            "danmuMode": self.config.display.danmu_mode,
+            "danmuMode": "scrolling",
             "showAvatar": self.config.display.show_avatar,
             "showNickname": self.config.display.show_nickname,
             "showImage": self.config.display.show_image,

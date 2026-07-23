@@ -6,7 +6,7 @@ Uses PyQt6 QSystemTrayIcon for native system tray integration.
 import logging
 from typing import Callable
 
-from PyQt6.QtGui import QIcon, QAction, QPixmap, QPainter, QColor, QActionGroup
+from PyQt6.QtGui import QIcon, QAction, QActionGroup, QPixmap, QPainter, QColor
 from PyQt6.QtWidgets import QMenu, QSystemTrayIcon, QApplication
 
 logger = logging.getLogger("danmuFishpi.tray")
@@ -23,14 +23,14 @@ class Tray:
             icon: The tray icon.
             callbacks: dict with keys:
                 - on_show_settings: callable
+                - on_show_input: callable
                 - on_toggle_danmu: callable
-                - on_switch_mode: callable(mode: str)
                 - on_switch_theme: callable(theme: str)
                 - on_quit: callable
         """
         self.callbacks = callbacks
         self.tray = QSystemTrayIcon(icon, app)
-        self.tray.setToolTip("弹幕鱼排聊天室")
+        self.tray.setToolTip("Py小梦的科技")
         self.visible = True
 
         self._build_menu()
@@ -46,25 +46,16 @@ class Tray:
 
         menu.addSeparator()
 
-        # Toggle danmu visibility
-        self.act_toggle = menu.addAction("隐藏弹幕")
-        self.act_toggle.triggered.connect(self._on_toggle)
+        # Show input
+        act_input = menu.addAction("发送消息")
+        act_input.triggered.connect(
+            lambda: self.callbacks.get("on_show_input", lambda: None)())
 
         menu.addSeparator()
 
-        # Mode submenu
-        mode_menu = menu.addMenu("弹幕模式")
-        self.mode_group = QActionGroup(mode_menu)
-        self.mode_actions = {}
-        for mode, label in [("scrolling", "横向滚动"),
-                            ("floating", "侧边悬浮"),
-                            ("bottom", "底部聊天")]:
-            act = QAction(label, mode_menu, checkable=True)
-            act.setActionGroup(self.mode_group)
-            act.triggered.connect(
-                lambda checked, m=mode: self._on_switch_mode(m))
-            mode_menu.addAction(act)
-            self.mode_actions[mode] = act
+        # Toggle danmu visibility
+        self.act_toggle = menu.addAction("隐藏弹幕")
+        self.act_toggle.triggered.connect(self._on_toggle)
 
         menu.addSeparator()
 
@@ -95,16 +86,8 @@ class Tray:
         self.act_toggle.setText("显示弹幕" if not self.visible else "隐藏弹幕")
         self.callbacks.get("on_toggle_danmu", lambda: None)()
 
-    def _on_switch_mode(self, mode: str) -> None:
-        self.callbacks.get("on_switch_mode", lambda m: None)(mode)
-
     def _on_switch_theme(self, theme: str) -> None:
         self.callbacks.get("on_switch_theme", lambda t: None)(theme)
-
-    def set_mode_checked(self, mode: str) -> None:
-        """Update the checked state of mode menu items."""
-        if mode in self.mode_actions:
-            self.mode_actions[mode].setChecked(True)
 
     def set_theme_checked(self, theme: str) -> None:
         """Update the checked state of theme menu items."""

@@ -111,6 +111,7 @@ def process_message(raw_msg: dict) -> dict | None:
         nickname = raw_msg.get("userName", "")
 
     return {
+        "user_id": raw_msg.get("userName", ""),
         "nickname": nickname,
         "avatar_url": raw_msg.get("userAvatarURL48", ""),
         "content": cleaned,

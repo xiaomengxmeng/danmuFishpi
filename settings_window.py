@@ -11,12 +11,15 @@ from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QWidget, QLabel, QLineEdit,
     QPushButton, QSlider, QCheckBox, QButtonGroup, QComboBox, QMessageBox,
-    QFrame, QSizePolicy,
+    QFrame, QSizePolicy, QTextEdit,
 )
 
 from config import Config, dpapi_encrypt, dpapi_decrypt
 
 logger = logging.getLogger("danmuFishpi.settings")
+
+APP_NAME = "Py小梦的科技"
+APP_VERSION = "1.0.0"
 
 
 class SettingsDialog(QDialog):
@@ -34,7 +37,7 @@ class SettingsDialog(QDialog):
         self._connected = False
         self._current_tab = "account"
 
-        self.setWindowTitle("弹幕鱼排 - 设置")
+        self.setWindowTitle(f"{APP_NAME} - 设置 v{APP_VERSION}")
         self.setFixedWidth(380)
         self.setWindowFlags(
             Qt.WindowType.Dialog
@@ -144,6 +147,23 @@ class SettingsDialog(QDialog):
             }}
             QLineEdit::placeholder {{
                 color: {c['text_muted']};
+            }}
+            QTextEdit {{
+                background: {c['bg_input']};
+                border: 1px solid {c['border']};
+                border-radius: 6px;
+                padding: 8px 12px;
+                color: {c['text_primary']};
+                font-size: 13px;
+                selection-background-color: {c['accent']};
+            }}
+            QTextEdit:focus {{
+                border: 1px solid {c['accent']};
+            }}
+            QLabel#hintLabel {{
+                color: {c['text_muted']};
+                font-size: 11px;
+                padding-bottom: 4px;
             }}
             QPushButton#primaryBtn {{
                 background: {c['success']};
@@ -257,7 +277,7 @@ class SettingsDialog(QDialog):
         header.setObjectName("header")
         header_layout = QHBoxLayout(header)
         header_layout.setContentsMargins(14, 10, 10, 10)
-        title = QLabel("弹幕鱼排")
+        title = QLabel(APP_NAME)
         title.setObjectName("titleLabel")
         dot = QLabel("●")
         dot.setStyleSheet("color: #58a6ff; font-size: 8px;")
@@ -278,7 +298,7 @@ class SettingsDialog(QDialog):
         tab_layout.setContentsMargins(0, 0, 0, 0)
         tab_layout.setSpacing(0)
         self.tab_buttons = {}
-        for tab_id, label in [("account", "账号"), ("display", "显示"), ("hotkey", "热键")]:
+        for tab_id, label in [("account", "账号"), ("display", "显示"), ("hotkey", "热键"), ("block_follow", "屏蔽/关注")]:
             btn = QPushButton(label)
             btn.setCheckable(True)
             btn.setAutoExclusive(True)
@@ -301,6 +321,7 @@ class SettingsDialog(QDialog):
         self._build_account_panel()
         self._build_display_panel()
         self._build_hotkey_tab()
+        self._build_block_follow_panel()
 
         # Footer
         footer = QWidget()
@@ -314,7 +335,7 @@ class SettingsDialog(QDialog):
         footer_layout.addWidget(self.lbl_conn_dot)
         footer_layout.addWidget(self.lbl_conn_text)
         footer_layout.addStretch()
-        version = QLabel("v1.0")
+        version = QLabel(f"v{APP_VERSION}")
         version.setObjectName("versionText")
         footer_layout.addWidget(version)
         layout.addWidget(footer)
@@ -401,19 +422,6 @@ class SettingsDialog(QDialog):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(14)
 
-        # Mode
-        layout.addWidget(self._section_label("弹幕模式"))
-        self.mode_group = QButtonGroup(self)
-        mode_layout = QHBoxLayout()
-        mode_layout.setSpacing(4)
-        self.btn_mode_scroll = self._group_button("滚动", "mode", "scrolling", self.mode_group)
-        self.btn_mode_float = self._group_button("悬浮", "mode", "floating", self.mode_group)
-        self.btn_mode_bottom = self._group_button("底部", "mode", "bottom", self.mode_group)
-        mode_layout.addWidget(self.btn_mode_scroll)
-        mode_layout.addWidget(self.btn_mode_float)
-        mode_layout.addWidget(self.btn_mode_bottom)
-        layout.addLayout(mode_layout)
-
         # Options
         layout.addWidget(self._section_label("显示元素"))
         options_layout = QHBoxLayout()
@@ -467,9 +475,21 @@ class SettingsDialog(QDialog):
         ])
         layout.addWidget(self.combo_font)
 
+        # Test message sender
+        layout.addSpacing(16)
+        layout.addWidget(self._section_label("测试发送"))
+        self.input_test_message = QLineEdit()
+        self.input_test_message.setPlaceholderText("输入测试消息，按 Enter 或点击发送")
+        layout.addWidget(self.input_test_message)
+
+        self.btn_send_test = QPushButton("发 送")
+        self.btn_send_test.setObjectName("primaryBtn")
+        self.btn_send_test.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_send_test.clicked.connect(self._on_send_test_message)
+        self.input_test_message.returnPressed.connect(self._on_send_test_message)
+        layout.addWidget(self.btn_send_test)
+
         # Live-apply display changes
-        for btn in (self.btn_mode_scroll, self.btn_mode_float, self.btn_mode_bottom):
-            btn.clicked.connect(self._emit_config_save)
         self.chk_avatar.stateChanged.connect(self._emit_config_save)
         self.chk_nickname.stateChanged.connect(self._emit_config_save)
         self.chk_image.stateChanged.connect(self._emit_config_save)
@@ -560,11 +580,6 @@ class SettingsDialog(QDialog):
     def _populate_form(self):
         self.input_username.setText(self.config.account.username or "")
 
-        mode = self.config.display.danmu_mode
-        self.btn_mode_scroll.setChecked(mode == "scrolling")
-        self.btn_mode_float.setChecked(mode == "floating")
-        self.btn_mode_bottom.setChecked(mode == "bottom")
-
         self.chk_avatar.setChecked(self.config.display.show_avatar)
         self.chk_nickname.setChecked(self.config.display.show_nickname)
         self.chk_image.setChecked(self.config.display.show_image)
@@ -584,6 +599,9 @@ class SettingsDialog(QDialog):
             self.combo_font.setCurrentIndex(idx)
         else:
             self.combo_font.setCurrentText(self.config.display.font_family)
+
+        self.text_blocked_ids.setPlainText("\n".join(self.config.display.blocked_user_ids))
+        self.text_followed_ids.setPlainText("\n".join(self.config.display.followed_user_ids))
 
         theme = self.config.theme
         self.btn_theme_dark.setChecked(theme == "dark")
@@ -621,22 +639,66 @@ class SettingsDialog(QDialog):
         self._emit_config_save()
         QMessageBox.information(self, "保存成功", "快捷键已保存，下次生效")
 
-    def _emit_config_save(self):
-        mode = "scrolling"
-        if self.btn_mode_float.isChecked():
-            mode = "floating"
-        elif self.btn_mode_bottom.isChecked():
-            mode = "bottom"
+    def _on_send_test_message(self):
+        text = self.input_test_message.text().strip()
+        if not text:
+            return
+        self.send_message_requested.emit(text)
+        self.input_test_message.clear()
 
+    def _build_block_follow_panel(self):
+        """Build the block/follow list management tab."""
+        panel = QWidget()
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(14)
+        layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+
+        # Block list
+        layout.addWidget(self._section_label("屏蔽用户 ID"))
+        hint_block = QLabel("每行一个用户 ID，保存后立即生效")
+        hint_block.setObjectName("hintLabel")
+        layout.addWidget(hint_block)
+        self.text_blocked_ids = QTextEdit()
+        self.text_blocked_ids.setPlaceholderText("user1\nuser2")
+        self.text_blocked_ids.setMaximumBlockCount(100)
+        layout.addWidget(self.text_blocked_ids)
+
+        # Follow list
+        layout.addWidget(self._section_label("特别关注用户 ID"))
+        hint_follow = QLabel("每行一个用户 ID，收到消息时会弹出托盘提醒")
+        hint_follow.setObjectName("hintLabel")
+        layout.addWidget(hint_follow)
+        self.text_followed_ids = QTextEdit()
+        self.text_followed_ids.setPlaceholderText("friend1\nfriend2")
+        self.text_followed_ids.setMaximumBlockCount(100)
+        layout.addWidget(self.text_followed_ids)
+
+        # Save button
+        self.btn_save_block_follow = QPushButton("保存")
+        self.btn_save_block_follow.setObjectName("primaryBtn")
+        self.btn_save_block_follow.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_save_block_follow.clicked.connect(self._emit_config_save)
+        layout.addWidget(self.btn_save_block_follow)
+
+        layout.addStretch()
+        self._panels["block_follow"] = panel
+
+    def _emit_config_save(self):
         area_map = {0: "fullscreen", 1: "topHalf", 2: "bottomHalf"}
         area = area_map.get(self.combo_area.currentIndex(), "fullscreen")
 
+        blocked_ids = [s.strip() for s in self.text_blocked_ids.toPlainText().splitlines() if s.strip()]
+        followed_ids = [s.strip() for s in self.text_followed_ids.toPlainText().splitlines() if s.strip()]
+
         display_config = {
-            "danmuMode": mode,
+            "danmuMode": "scrolling",
             "showAvatar": self.chk_avatar.isChecked(),
             "showNickname": self.chk_nickname.isChecked(),
             "showImage": self.chk_image.isChecked(),
             "showRedPacket": self.chk_red_packet.isChecked(),
+            "blockedUserIds": blocked_ids,
+            "followedUserIds": followed_ids,
             "danmuSpeed": self.slider_speed.value(),
             "danmuArea": area,
             "danmuWidth": self.slider_width.value(),

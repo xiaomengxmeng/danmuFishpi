@@ -1,6 +1,7 @@
 """Floating input box for sending chat messages.
 
-A centered bottom bar with a clear header, visible border and shadow.
+A minimal bottom input bar without a heavy border, so it doesn't visually
+interfere with the danmu overlay behind it.
 """
 
 import logging
@@ -15,15 +16,15 @@ logger = logging.getLogger("danmuFishpi.inputbox")
 
 
 class InputBox(QWidget):
-    """A floating, frameless input box for sending chatroom messages."""
+    """A floating, frameless bottom input bar."""
 
     message_sent = pyqtSignal(str)
     closed = pyqtSignal()
 
     THEME_DARK = {
-        "bg": QColor(22, 27, 34, 245),
+        "bg": QColor(13, 17, 23, 230),
         "border": QColor(48, 54, 61),
-        "input_bg": QColor(13, 17, 23, 240),
+        "input_bg": QColor(22, 27, 34, 240),
         "input_border": QColor(62, 68, 76),
         "input_border_focus": QColor(88, 166, 255),
         "text_primary": "#e6edf3",
@@ -33,7 +34,7 @@ class InputBox(QWidget):
     }
 
     THEME_LIGHT = {
-        "bg": QColor(255, 255, 255, 245),
+        "bg": QColor(255, 255, 255, 230),
         "border": QColor(208, 215, 222),
         "input_bg": QColor(246, 248, 250, 240),
         "input_border": QColor(208, 215, 222),
@@ -53,27 +54,17 @@ class InputBox(QWidget):
             | Qt.WindowType.Tool
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.setFixedWidth(460)
+        self.setFixedWidth(520)
         self._build_ui()
         self.hide()
 
     def _build_ui(self):
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 12, 16, 12)
-        layout.setSpacing(10)
-
-        header = QHBoxLayout()
-        title = QLabel("发送消息到聊天室")
-        title.setStyleSheet("font-size: 13px; font-weight: 600; color: " + self._t("text_primary") + ";")
-        header.addWidget(title)
-        header.addStretch()
-        hint = QLabel("Enter 发送 · Esc 关闭")
-        hint.setStyleSheet("font-size: 11px; color: " + self._t("text_muted") + ";")
-        header.addWidget(hint)
-        layout.addLayout(header)
+        layout.setContentsMargins(16, 10, 16, 10)
+        layout.setSpacing(8)
 
         self.input_field = QLineEdit()
-        self.input_field.setPlaceholderText("在这里输入消息...")
+        self.input_field.setPlaceholderText("发送消息到聊天室 · Enter 发送 · Esc 关闭")
         self.input_field.returnPressed.connect(self._on_send)
         layout.addWidget(self.input_field)
 
@@ -97,7 +88,7 @@ class InputBox(QWidget):
                 border: none;
             }}
             QLineEdit {{
-                background: rgba(13,17,23,0.8);
+                background: {t['input_bg'].name()};
                 border: 1px solid {t['input_border'].name()};
                 border-radius: 8px;
                 padding: 12px 14px;
@@ -124,7 +115,7 @@ class InputBox(QWidget):
         """Center the input box horizontally near the bottom of the primary screen."""
         screen = QApplication.primaryScreen().availableGeometry()
         x = screen.x() + (screen.width() - self.width()) // 2
-        y = screen.y() + screen.height() - self.height() - 80
+        y = screen.y() + screen.height() - self.height() - 20
         self.move(x, y)
         self.input_field.clear()
         self.lbl_error.clear()
@@ -160,10 +151,4 @@ class InputBox(QWidget):
         painter.setPen(Qt.PenStyle.NoPen)
         t = self.THEME_LIGHT if self._theme == "light" else self.THEME_DARK
         painter.setBrush(t["bg"])
-        painter.drawRoundedRect(self.rect(), 12, 12)
-        # Border
-        border_pen = QPen(t["border"])
-        border_pen.setWidth(1)
-        painter.setPen(border_pen)
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.drawRoundedRect(self.rect().adjusted(1, 1, -1, -1), 12, 12)
+        painter.drawRoundedRect(self.rect(), 10, 10)

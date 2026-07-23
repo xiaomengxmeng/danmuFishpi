@@ -77,6 +77,8 @@ class Display:
     show_nickname: bool = True
     show_image: bool = True
     show_red_packet: bool = True
+    blocked_user_ids: list[str] = field(default_factory=list)
+    followed_user_ids: list[str] = field(default_factory=list)
     danmu_speed: int = 5               # 1-10
     danmu_area: str = "fullscreen"     # fullscreen | topHalf | bottomHalf
     danmu_width: int = 100             # 30-100 percentage
@@ -117,6 +119,8 @@ def config_to_dict(cfg: Config) -> dict:
         "showNickname": disp["show_nickname"],
         "showImage": disp["show_image"],
         "showRedPacket": disp["show_red_packet"],
+        "blockedUserIds": disp["blocked_user_ids"],
+        "followedUserIds": disp["followed_user_ids"],
         "danmuSpeed": disp["danmu_speed"],
         "danmuArea": disp["danmu_area"],
         "danmuWidth": disp["danmu_width"],
@@ -143,6 +147,8 @@ def config_from_dict(d: dict) -> Config:
         show_nickname=disp.get("showNickname", True),
         show_image=disp.get("showImage", True),
         show_red_packet=disp.get("showRedPacket", True),
+        blocked_user_ids=disp.get("blockedUserIds", []),
+        followed_user_ids=disp.get("followedUserIds", []),
         danmu_speed=disp.get("danmuSpeed", 5),
         danmu_area=disp.get("danmuArea", "fullscreen"),
         danmu_width=disp.get("danmuWidth", 100),
