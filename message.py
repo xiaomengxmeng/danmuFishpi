@@ -12,17 +12,25 @@ _IFRAME_RE = re.compile(r"(?is)<iframe[^>]*>.*?</iframe>")
 _STYLE_RE = re.compile(r"(?is)<style[^>]*>.*?</style>")
 _IMG_RE = re.compile(r"(?is)<img[^>]*>")
 _TAG_RE = re.compile(r"<[^>]+>")
+_BR_RE = re.compile(r"(?is)<br\s*/?>|</p>|</div>|</h[1-6]>")
 
-# Placeholder pattern to restore img tags after stripping
+# Placeholder pattern to restore img tags
 _PLACEHOLDER_RE = re.compile(r"\{\{IMG_(\d+)\}\}")
 
 
 def clean_html(content: str) -> str:
-    """Clean HTML content: remove scripts/iframes/styles, preserve <img>, strip other tags."""
+    """Clean HTML content: remove scripts/iframes/styles, preserve <img>, strip other tags.
+
+    Preserves explicit line breaks (<br>, </p>, </div>) as newline characters so the
+    danmu overlay can render them with the same formatting as the chatroom.
+    """
     # Remove dangerous elements
     content = _SCRIPT_RE.sub("", content)
     content = _IFRAME_RE.sub("", content)
     content = _STYLE_RE.sub("", content)
+
+    # Convert block/line-break tags to newlines before stripping tags
+    content = _BR_RE.sub("\n", content)
 
     # Protect <img> tags with placeholders
     img_tags = _IMG_RE.findall(content)
@@ -58,8 +66,12 @@ def process_message(raw_msg: dict) -> dict | None:
     content = raw_msg.get("content", "")
     cleaned = clean_html(content)
 
+    nickname = raw_msg.get("userNickname", "")
+    if not nickname:
+        nickname = raw_msg.get("userName", "")
+
     return {
-        "nickname": raw_msg.get("userNickname", ""),
+        "nickname": nickname,
         "avatar_url": raw_msg.get("userAvatarURL48", ""),
         "content": cleaned,
         "has_image": "<img" in cleaned,
