@@ -8,7 +8,7 @@ GIF images are decoded with QMovie into individual frames for animation support.
 
 import logging
 
-from PyQt6.QtCore import QObject, pyqtSignal, QUrl, QByteArray
+from PyQt6.QtCore import QObject, pyqtSignal, QUrl, QByteArray, QBuffer
 from PyQt6.QtGui import QPixmap, QMovie, QImage
 from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkRequest, QNetworkReply
 
@@ -99,76 +99,88 @@ class ImageCache(QObject):
         url = reply.url().toString()
         self._pending.discard(url)
 
-        if reply.error() != QNetworkReply.NetworkError.NoError:
-            logger.debug(f"Image download failed for {url}: {reply.errorString()}")
-            reply.deleteLater()
-            return
+        try:
+            if reply.error() != QNetworkReply.NetworkError.NoError:
+                logger.debug(f"Image download failed for {url}: {reply.errorString()}")
+                reply.deleteLater()
+                return
 
-        data = reply.readAll()
-        raw = bytes(data)
+            data = reply.readAll()
+            raw = bytes(data)
 
-        # Detect GIF and decode frames
-        if _is_gif(raw):
-            self._decode_gif(url, raw)
-            self.loaded.emit(url)
-            reply.deleteLater()
-            return
+            # Detect GIF and decode frames
+            if _is_gif(raw):
+                self._decode_gif(url, raw)
+                self.loaded.emit(url)
+                reply.deleteLater()
+                return
 
-        pixmap = QPixmap()
-        if pixmap.loadFromData(data):
-            self._cache[url] = pixmap
-            logger.debug(f"Image loaded: {url} ({pixmap.width()}x{pixmap.height()})")
-            self.loaded.emit(url)
-        else:
-            logger.debug(f"Image decode failed: {url}")
-
-        reply.deleteLater()
-
-    def _decode_gif(self, url: str, data: bytes) -> None:
-        """Decode a GIF into individual frames via QMovie."""
-        movie = QMovie()
-        movie.setCacheMode(QMovie.CacheMode.CacheAll)
-        qba = QByteArray(data)
-        movie.setDevice(qba.data())
-
-        if not movie.isValid():
-            logger.debug(f"GIF decode invalid: {url}")
-            # Fallback: try loading as static
             pixmap = QPixmap()
             if pixmap.loadFromData(data):
                 self._cache[url] = pixmap
-            return
+                logger.debug(f"Image loaded: {url} ({pixmap.width()}x{pixmap.height()})")
+                self.loaded.emit(url)
+            else:
+                logger.debug(f"Image decode failed: {url}")
 
-        movie.jumpToFrame(0)
-        frames: list[QPixmap] = []
-        durations: list[int] = []
+            reply.deleteLater()
+        except Exception as e:
+            logger.error(f"Image cache _on_finished error for {url}: {e}")
+            reply.deleteLater()
 
-        frame_count = movie.frameCount()
-        if frame_count <= 0:
-            frame_count = 1
+    def _decode_gif(self, url: str, data: bytes) -> None:
+        """Decode a GIF into individual frames via QMovie."""
+        try:
+            movie = QMovie()
+            movie.setCacheMode(QMovie.CacheMode.CacheAll)
+            buf = QBuffer()
+            buf.setData(QByteArray(data))
+            movie.setDevice(buf)
 
-        for i in range(frame_count):
-            movie.jumpToFrame(i)
-            pm = movie.currentPixmap()
-            if not pm.isNull():
-                frames.append(pm.copy())
-            # nextFrameDelay returns ms between frames
-            delay = movie.nextFrameDelay()
-            # GIF specifies delay in 1/100 s units; QMovie returns ms.
-            # Treat 0 as 100ms default (as browsers do).
-            durations.append(delay if delay > 0 else 100)
+            if not movie.isValid():
+                logger.debug(f"GIF decode invalid: {url}")
+                # Fallback: try loading as static
+                pixmap = QPixmap()
+                if pixmap.loadFromData(data):
+                    self._cache[url] = pixmap
+                return
 
-        movie.stop()
+            movie.jumpToFrame(0)
+            frames: list[QPixmap] = []
+            durations: list[int] = []
 
-        if frames:
-            # Store first frame in static cache as fallback
-            self._cache[url] = frames[0]
-            self._animated[url] = AnimatedImage(frames, durations)
-            logger.debug(
-                f"GIF loaded: {url} "
-                f"({frames[0].width()}x{frames[0].height()}, "
-                f"{len(frames)} frames, {sum(durations)}ms loop)"
-            )
-        else:
-            logger.debug(f"GIF decode produced no frames: {url}")
+            frame_count = movie.frameCount()
+            if frame_count <= 0:
+                frame_count = 1
+
+            for i in range(frame_count):
+                movie.jumpToFrame(i)
+                pm = movie.currentPixmap()
+                if not pm.isNull():
+                    frames.append(pm.copy())
+                # nextFrameDelay returns ms between frames
+                delay = movie.nextFrameDelay()
+                # GIF specifies delay in 1/100 s units; QMovie returns ms.
+                # Treat 0 as 100ms default (as browsers do).
+                durations.append(delay if delay > 0 else 100)
+
+            movie.stop()
+
+            if frames:
+                # Store first frame in static cache as fallback
+                self._cache[url] = frames[0]
+                self._animated[url] = AnimatedImage(frames, durations)
+                logger.debug(
+                    f"GIF loaded: {url} "
+                    f"({frames[0].width()}x{frames[0].height()}, "
+                    f"{len(frames)} frames, {sum(durations)}ms loop)"
+                )
+            else:
+                logger.debug(f"GIF decode produced no frames: {url}")
+        except Exception as e:
+            logger.error(f"GIF decode error for {url}: {e}")
+            # Fallback: static image
+            pixmap = QPixmap()
+            if pixmap.loadFromData(data):
+                self._cache[url] = pixmap
 
