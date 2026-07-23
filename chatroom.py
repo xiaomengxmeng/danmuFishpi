@@ -30,16 +30,28 @@ class Connection:
     """Manages WebSocket connection to fishpi chatroom with auto-reconnect."""
 
     def __init__(self, api_key: str, on_message: Callable[[dict], None],
-                 on_error: Optional[Callable[[str], None]] = None):
+                 on_error: Optional[Callable[[str], None]] = None,
+                 on_status: Optional[Callable[[bool], None]] = None):
         self.api_key = api_key
         self.on_message = on_message
         self.on_error = on_error
+        self.on_status = on_status
         self._ws: Optional[websocket.WebSocketApp] = None
         self._thread: Optional[threading.Thread] = None
         self._running = False
         self._reconnect_delay = 3.0
         self._max_reconnect_delay = 60.0
         self._ws_url: Optional[str] = None
+        self.is_connected = False
+
+    def _set_connected(self, connected: bool) -> None:
+        if self.is_connected != connected:
+            self.is_connected = connected
+            if self.on_status:
+                try:
+                    self.on_status(connected)
+                except Exception:
+                    pass
 
     def start(self) -> None:
         """Start the connection in a background thread."""
@@ -113,6 +125,7 @@ class Connection:
     def _on_ws_open(self, ws) -> None:
         """Called when WebSocket connection is established."""
         self._reconnect_delay = 3.0  # Reset backoff
+        self._set_connected(True)
         logger.info("Chatroom connected")
 
     def _on_ws_message(self, ws, raw_data: str) -> None:
@@ -135,6 +148,7 @@ class Connection:
 
     def _on_ws_close(self, ws, code, msg) -> None:
         """Called when WebSocket connection is closed."""
+        self._set_connected(False)
         logger.info(f"WebSocket closed: code={code}, msg={msg}")
 
     def _on_ws_ping(self, ws, data) -> None:

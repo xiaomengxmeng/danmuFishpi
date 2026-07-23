@@ -239,6 +239,7 @@ class App:
                 api_key=api_key,
                 on_message=lambda msg: self.bridge.new_message.emit(msg),
                 on_error=lambda err: self.bridge.chatroom_error.emit(err),
+                on_status=self._on_chatroom_status,
             )
             self.conn.start()
 
@@ -252,6 +253,11 @@ class App:
             if not success:
                 logger.error(f"Send failed: {error}")
         threading.Thread(target=_send, daemon=True).start()
+
+    def _on_chatroom_status(self, connected: bool) -> None:
+        """Update settings dialog connection indicator."""
+        if self.settings_dialog is not None:
+            self.settings_dialog.set_connected(connected)
 
     # ── Input Box ──────────────────────────────────────────────
 
@@ -277,19 +283,27 @@ class App:
     # ── Settings ───────────────────────────────────────────────
 
     def show_settings(self) -> None:
-        """Show the settings dialog."""
+        """Show the settings dialog docked to the right edge of the screen."""
         if self.settings_dialog is None:
             self.settings_dialog = SettingsDialog(self.config)
             self.settings_dialog.login_requested.connect(self.do_login)
             self.settings_dialog.logout_requested.connect(self.do_logout)
             self.settings_dialog.config_saved.connect(self._on_config_saved)
             self.settings_dialog.send_message_requested.connect(self.send_message)
+            # Sync current connection state
+            self.settings_dialog.set_connected(self.chatroom.is_connected)
 
         # Disable click-through while settings are open
         self.overlay.set_click_through(False)
         self.settings_dialog.show()
         self.settings_dialog.raise_()
         self.settings_dialog.activateWindow()
+
+        # Position at the right edge of the primary screen
+        screen = QApplication.primaryScreen().availableGeometry()
+        x = screen.x() + screen.width() - self.settings_dialog.width()
+        y = screen.y()
+        self.settings_dialog.setGeometry(x, y, self.settings_dialog.width(), screen.height())
 
         # Re-enable click-through when settings dialog closes
         self.settings_dialog.finished.connect(

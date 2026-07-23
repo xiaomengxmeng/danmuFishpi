@@ -50,6 +50,7 @@ class DanmuEngine:
     def __init__(self):
         self.mode: str = "scrolling"
         self.font_size: int = 24
+        self.font_family: str = "Microsoft YaHei"
         self.danmu_speed: int = 5
         self.danmu_area: str = "fullscreen"
         self.show_avatar: bool = True
@@ -71,6 +72,7 @@ class DanmuEngine:
         """Update engine settings from a display config dict."""
         self.mode = display_config.get("danmuMode", self.mode)
         self.font_size = display_config.get("fontSize", self.font_size)
+        self.font_family = display_config.get("fontFamily", self.font_family)
         self.danmu_speed = display_config.get("danmuSpeed", self.danmu_speed)
         self.danmu_area = display_config.get("danmuArea", self.danmu_area)
         self.show_avatar = display_config.get("showAvatar", self.show_avatar)

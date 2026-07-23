@@ -82,6 +82,7 @@ class Display:
     danmu_height: int = 100            # 30-100 percentage
     danmu_opacity: int = 100           # 30-100 percentage
     font_size: int = 24                # 12-48 px
+    font_family: str = "Microsoft YaHei"  # font family name
 
 
 @dataclass
@@ -120,6 +121,7 @@ def config_to_dict(cfg: Config) -> dict:
         "danmuHeight": disp["danmu_height"],
         "danmuOpacity": disp["danmu_opacity"],
         "fontSize": disp["font_size"],
+        "fontFamily": disp["font_family"],
     }
     return d
 
@@ -144,6 +146,7 @@ def config_from_dict(d: dict) -> Config:
         danmu_height=disp.get("danmuHeight", 100),
         danmu_opacity=disp.get("danmuOpacity", 100),
         font_size=disp.get("fontSize", 24),
+        font_family=disp.get("fontFamily", "Microsoft YaHei"),
     )
     cfg.hotkey = d.get("hotkey", "ctrl+shift+enter")
     cfg.theme = d.get("theme", "dark")

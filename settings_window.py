@@ -37,13 +37,11 @@ class SettingsDialog(QDialog):
         self.setWindowTitle("弹幕鱼排 - 设置")
         self.setFixedWidth(380)
         self.setWindowFlags(
-            Qt.WindowType.FramelessWindowHint
+            Qt.WindowType.Dialog
+            | Qt.WindowType.WindowCloseButtonHint
+            | Qt.WindowType.WindowTitleHint
             | Qt.WindowType.WindowStaysOnTopHint
-            | Qt.WindowType.Tool
         )
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-
-        self._drag_pos = None
 
         self._apply_theme()
         self._build_ui()
@@ -451,6 +449,22 @@ class SettingsDialog(QDialog):
         self.slider_font = self._make_slider(12, 48, self.config.display.font_size)
         layout.addLayout(self._slider_row("字号", self.slider_font, self.config.display.font_size, "px"))
 
+        layout.addWidget(self._section_label("字体"))
+        self.combo_font = QComboBox()
+        self.combo_font.setEditable(True)
+        self.combo_font.addItems([
+            "Microsoft YaHei",
+            "SimHei",
+            "SimSun",
+            "PingFang SC",
+            "Noto Sans CJK SC",
+            "Arial",
+            "Segoe UI",
+            "Consolas",
+            "monospace",
+        ])
+        layout.addWidget(self.combo_font)
+
         # Live-apply display changes
         for btn in (self.btn_mode_scroll, self.btn_mode_float, self.btn_mode_bottom):
             btn.clicked.connect(self._emit_config_save)
@@ -458,6 +472,7 @@ class SettingsDialog(QDialog):
         self.chk_nickname.stateChanged.connect(self._emit_config_save)
         self.chk_image.stateChanged.connect(self._emit_config_save)
         self.combo_area.currentIndexChanged.connect(self._emit_config_save)
+        self.combo_font.currentTextChanged.connect(self._emit_config_save)
         self.slider_speed.valueChanged.connect(self._emit_config_save)
         self.slider_width.valueChanged.connect(self._emit_config_save)
         self.slider_height.valueChanged.connect(self._emit_config_save)
@@ -560,6 +575,12 @@ class SettingsDialog(QDialog):
         self.slider_opacity.setValue(self.config.display.danmu_opacity)
         self.slider_font.setValue(self.config.display.font_size)
 
+        idx = self.combo_font.findText(self.config.display.font_family)
+        if idx >= 0:
+            self.combo_font.setCurrentIndex(idx)
+        else:
+            self.combo_font.setCurrentText(self.config.display.font_family)
+
         theme = self.config.theme
         self.btn_theme_dark.setChecked(theme == "dark")
         self.btn_theme_light.setChecked(theme == "light")
@@ -617,6 +638,7 @@ class SettingsDialog(QDialog):
             "danmuHeight": self.slider_height.value(),
             "danmuOpacity": self.slider_opacity.value(),
             "fontSize": self.slider_font.value(),
+            "fontFamily": self.combo_font.currentText().strip() or "Microsoft YaHei",
         }
         self.config_saved.emit(display_config)
 
@@ -668,27 +690,6 @@ class SettingsDialog(QDialog):
         self.config = config
         self._apply_theme()
         self._populate_form()
-
-    def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
-            # Only drag when clicking the header area (top 44 px)
-            if event.position().y() <= 44:
-                self._drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
-                event.accept()
-                return
-        super().mousePressEvent(event)
-
-    def mouseMoveEvent(self, event):
-        if event.buttons() == Qt.MouseButton.LeftButton and self._drag_pos is not None:
-            self.move(event.globalPosition().toPoint() - self._drag_pos)
-            event.accept()
-            return
-        super().mouseMoveEvent(event)
-
-    def mouseReleaseEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
-            self._drag_pos = None
-        super().mouseReleaseEvent(event)
 
     def keyPressEvent(self, event):
         if self.input_hotkey.hasFocus() and self.input_hotkey.text() == "":

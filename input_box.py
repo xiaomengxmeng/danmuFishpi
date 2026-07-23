@@ -1,7 +1,6 @@
 """Floating input box for sending chat messages.
 
-Matches the original Wails input-box-overlay design: a centered,
-semi-transparent, blurred bar at the bottom of the screen.
+A centered bottom bar with a clear header, visible border and shadow.
 """
 
 import logging
@@ -21,23 +20,26 @@ class InputBox(QWidget):
     message_sent = pyqtSignal(str)
     closed = pyqtSignal()
 
-    # Theme colors matching the overlay/settings
     THEME_DARK = {
-        "bg": "rgba(13, 17, 23, 0.92)",
-        "border": "rgba(255, 255, 255, 0.08)",
-        "input_bg": "rgba(255, 255, 255, 0.04)",
+        "bg": QColor(22, 27, 34, 245),
+        "border": QColor(48, 54, 61),
+        "input_bg": QColor(13, 17, 23, 240),
+        "input_border": QColor(62, 68, 76),
+        "input_border_focus": QColor(88, 166, 255),
         "text_primary": "#e6edf3",
-        "text_muted": "#6e7681",
+        "text_muted": "#8b949e",
         "accent": "#58a6ff",
         "error": "#f85149",
     }
 
     THEME_LIGHT = {
-        "bg": "rgba(255, 255, 255, 0.92)",
-        "border": "rgba(0, 0, 0, 0.12)",
-        "input_bg": "rgba(0, 0, 0, 0.04)",
+        "bg": QColor(255, 255, 255, 245),
+        "border": QColor(208, 215, 222),
+        "input_bg": QColor(246, 248, 250, 240),
+        "input_border": QColor(208, 215, 222),
+        "input_border_focus": QColor(9, 105, 218),
         "text_primary": "#1f2328",
-        "text_muted": "#8c959f",
+        "text_muted": "#656d76",
         "accent": "#0969da",
         "error": "#cf222e",
     }
@@ -51,33 +53,41 @@ class InputBox(QWidget):
             | Qt.WindowType.Tool
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
-        self.setFixedWidth(420)
+        self.setFixedWidth(460)
         self._build_ui()
-        self._apply_theme()
         self.hide()
 
     def _build_ui(self):
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(8)
+        layout.setContentsMargins(16, 12, 16, 12)
+        layout.setSpacing(10)
+
+        header = QHBoxLayout()
+        title = QLabel("发送消息到聊天室")
+        title.setStyleSheet("font-size: 13px; font-weight: 600; color: " + self._t("text_primary") + ";")
+        header.addWidget(title)
+        header.addStretch()
+        hint = QLabel("Enter 发送 · Esc 关闭")
+        hint.setStyleSheet("font-size: 11px; color: " + self._t("text_muted") + ";")
+        header.addWidget(hint)
+        layout.addLayout(header)
 
         self.input_field = QLineEdit()
-        self.input_field.setPlaceholderText("输入消息发送到聊天室...")
+        self.input_field.setPlaceholderText("在这里输入消息...")
         self.input_field.returnPressed.connect(self._on_send)
         layout.addWidget(self.input_field)
 
-        bottom = QHBoxLayout()
         self.lbl_error = QLabel("")
-        self.lbl_error.setStyleSheet("font-size: 12px;")
+        self.lbl_error.setStyleSheet("font-size: 12px; color: " + self._t("error") + ";")
         self.lbl_error.setWordWrap(True)
-        bottom.addWidget(self.lbl_error, stretch=1)
+        layout.addWidget(self.lbl_error)
 
-        self.lbl_hint = QLabel("Enter 发送 · Esc 关闭")
-        self.lbl_hint.setStyleSheet("font-size: 11px;")
-        self.lbl_hint.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        bottom.addWidget(self.lbl_hint)
-        layout.addLayout(bottom)
+        self._apply_theme()
+
+    def _t(self, key: str) -> str:
+        t = self.THEME_LIGHT if self._theme == "light" else self.THEME_DARK
+        val = t[key]
+        return val if isinstance(val, str) else val.name()
 
     def _apply_theme(self):
         t = self.THEME_LIGHT if self._theme == "light" else self.THEME_DARK
@@ -87,16 +97,16 @@ class InputBox(QWidget):
                 border: none;
             }}
             QLineEdit {{
-                background: {t['input_bg']};
-                border: 1px solid {t['border']};
-                border-radius: 6px;
-                padding: 10px 14px;
+                background: rgba(13,17,23,0.8);
+                border: 1px solid {t['input_border'].name()};
+                border-radius: 8px;
+                padding: 12px 14px;
                 color: {t['text_primary']};
-                font-size: 14px;
+                font-size: 15px;
                 selection-background-color: {t['accent']};
             }}
             QLineEdit:focus {{
-                border: 1px solid {t['accent']};
+                border: 1px solid {t['input_border_focus'].name()};
             }}
             QLabel {{
                 color: {t['text_muted']};
@@ -104,6 +114,7 @@ class InputBox(QWidget):
                 border: none;
             }}
         """)
+        self.lbl_error.setStyleSheet(f"font-size: 12px; color: {t['error']};")
 
     def set_theme(self, theme: str):
         self._theme = theme
@@ -113,7 +124,7 @@ class InputBox(QWidget):
         """Center the input box horizontally near the bottom of the primary screen."""
         screen = QApplication.primaryScreen().availableGeometry()
         x = screen.x() + (screen.width() - self.width()) // 2
-        y = screen.y() + screen.height() - self.height() - 60
+        y = screen.y() + screen.height() - self.height() - 80
         self.move(x, y)
         self.input_field.clear()
         self.lbl_error.clear()
@@ -148,6 +159,11 @@ class InputBox(QWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setPen(Qt.PenStyle.NoPen)
         t = self.THEME_LIGHT if self._theme == "light" else self.THEME_DARK
-        # Parse rgba string for QColor
-        painter.setBrush(QColor(t["bg"]))
-        painter.drawRoundedRect(self.rect(), 10, 10)
+        painter.setBrush(t["bg"])
+        painter.drawRoundedRect(self.rect(), 12, 12)
+        # Border
+        border_pen = QPen(t["border"])
+        border_pen.setWidth(1)
+        painter.setPen(border_pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawRoundedRect(self.rect().adjusted(1, 1, -1, -1), 12, 12)

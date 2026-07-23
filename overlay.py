@@ -116,7 +116,8 @@ class DanmuOverlay(QWidget):
     def update_config(self, display_config: dict, theme: str) -> None:
         """Update overlay settings from config."""
         self.engine.update_config(display_config)
-        self.font = QFont("Microsoft YaHei", self.engine.font_size)
+        font_family = display_config.get("fontFamily", "Microsoft YaHei") or "Microsoft YaHei"
+        self.font = QFont(font_family, self.engine.font_size)
         self.font.setBold(True)
         self.font_metrics = QFontMetrics(self.font)
         self.theme = THEME_LIGHT if theme == "light" else THEME_DARK
@@ -279,9 +280,47 @@ class DanmuOverlay(QWidget):
         if item_id in self._pixmaps:
             return self._pixmaps[item_id]
 
-        # Measure and create pixmap
-        width = int(self._measure_item_width(item))
-        height = int(self.font_metrics.height() + 10)
+        # Max width is 60% of container width
+        max_width = int(self.engine.container_width * 0.6)
+        avatar_size = int(self.engine.font_size * 1.4)
+        padding = 12
+        line_gap = 4
+
+        # Prepare prefix size
+        prefix_w = 0
+        if self.engine.show_avatar and item.nickname:
+            prefix_w += avatar_size + 8
+        nick_text = ""
+        if self.engine.show_nickname and item.nickname:
+            nick_text = item.nickname + ": "
+            prefix_w += self.font_metrics.horizontalAdvance(nick_text) + 8
+
+        # Content width
+        content = self._strip_html(item.content)
+        if item.has_image and not self.engine.show_image:
+            content = "[图片] " + content
+
+        # Decide layout: if total width fits, single line; otherwise wrap content
+        content_single_w = self.font_metrics.horizontalAdvance(content)
+        total_single_w = prefix_w + content_single_w + padding * 2
+
+        if total_single_w <= max_width:
+            # Single line
+            width = max(1, total_single_w)
+            height = int(self.font_metrics.height() + 10)
+            lines = 1
+        else:
+            # Wrap content into multiple lines (max 2 lines for scrolling)
+            available_w = max(100, max_width - prefix_w - padding * 2)
+            flags = int(Qt.TextFlag.TextWordWrap)
+            br = self.font_metrics.boundingRect(
+                QRect(0, 0, available_w, 1000), flags, content)
+            line_h = self.font_metrics.height()
+            max_h = line_h * 2 + line_gap  # limit to 2 lines visually
+            lines = max(1, min(2, (br.height() + line_h - 1) // line_h))
+            width = max_width
+            height = int(line_h * lines + line_gap * (lines - 1) + 10)
+
         if width <= 0 or height <= 0:
             return QPixmap()
 
@@ -295,9 +334,8 @@ class DanmuOverlay(QWidget):
         p.setRenderHint(QPainter.RenderHint.TextAntialiasing)
         p.setFont(self.font)
 
-        avatar_size = int(self.engine.font_size * 1.4)
         text_y = self.font_metrics.ascent() + 5
-        text_x = 12
+        text_x = padding
 
         # Draw avatar
         if self.engine.show_avatar and item.nickname:
@@ -306,17 +344,18 @@ class DanmuOverlay(QWidget):
 
         # Draw nickname
         if self.engine.show_nickname and item.nickname:
-            nick = item.nickname + ": "
-            self._draw_text_with_outline(p, nick, text_x, text_y,
+            self._draw_text_with_outline(p, nick_text, text_x, text_y,
                                          self.theme["nickname"])
-            text_x += self.font_metrics.horizontalAdvance(nick) + 8
+            text_x += self.font_metrics.horizontalAdvance(nick_text) + 8
 
-        # Draw content
-        content = self._strip_html(item.content)
-        if item.has_image and not self.engine.show_image:
-            content = "[图片] " + content
-        self._draw_text_with_outline(p, content, text_x, text_y,
-                                     self.theme["text"])
+        # Draw content (single line or wrapped)
+        if lines == 1:
+            self._draw_text_with_outline(p, content, text_x, text_y,
+                                         self.theme["text"])
+        else:
+            available_w = max(100, width - text_x - padding)
+            content_rect = QRect(text_x, 5, available_w, height - 10)
+            self._draw_text_wrapped(p, content, content_rect)
 
         p.end()
 
@@ -325,6 +364,19 @@ class DanmuOverlay(QWidget):
         item.height = height
         self._pixmaps[item_id] = pm
         return pm
+
+    def _draw_text_wrapped(self, painter: QPainter, text: str,
+                           rect: QRect) -> None:
+        """Draw wrapped text with outline."""
+        outline_pen = QPen(self.theme["outline"])
+        outline_pen.setWidth(2)
+        painter.setPen(outline_pen)
+        flags = Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop | Qt.TextFlag.TextWordWrap
+        for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1),
+                       (-1, -1), (1, 1), (-1, 1), (1, -1)]:
+            painter.drawText(rect.translated(dx, dy), flags, text)
+        painter.setPen(QPen(self.theme["text"]))
+        painter.drawText(rect, flags, text)
 
     def _draw_text_with_outline(self, painter: QPainter, text: str,
                                  x: int, y: int, color: QColor) -> None:
@@ -418,12 +470,14 @@ class DanmuOverlay(QWidget):
         if item.has_image and not self.engine.show_image:
             content = "[图片] " + content
 
-        # Measure content width inside card
+        # Measure content inside card with word wrap
         text_w = w - padding * 2 - (avatar_size + gap if self.engine.show_avatar else 0)
-        content_elided = content_fm.elidedText(content, Qt.TextElideMode.ElideRight, int(text_w))
+        text_w = max(40, text_w)
+        flags = int(Qt.TextFlag.TextWordWrap)
+        content_br = content_fm.boundingRect(QRect(0, 0, int(text_w), 1000), flags, content)
+        content_h = content_br.height()
 
         nick_h = nick_fm.height() if self.engine.show_nickname and item.nickname else 0
-        content_h = content_fm.height() if content else 0
         total_h = padding * 2 + nick_h + (line_gap if nick_h else 0) + content_h
         total_h = max(total_h, avatar_size + padding * 2)
 
@@ -446,11 +500,12 @@ class DanmuOverlay(QWidget):
             painter.setFont(nick_font)
             painter.drawText(int(text_x), int(text_y), item.nickname)
 
-        # Draw content
+        # Draw content (wrapped)
         text_y += nick_h + line_gap
         painter.setPen(QPen(self.theme["text"]))
         painter.setFont(content_font)
-        painter.drawText(int(text_x), int(text_y), content_elided)
+        content_rect = QRect(int(text_x), int(text_y), int(text_w), int(total_h - text_y - padding))
+        painter.drawText(content_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop | Qt.TextFlag.TextWordWrap, content)
 
         painter.setFont(self.font)
         return total_h
@@ -475,10 +530,12 @@ class DanmuOverlay(QWidget):
             content = "[图片] " + content
 
         text_w = w - padding * 2 - (avatar_size + gap if self.engine.show_avatar else 0)
-        content_elided = content_fm.elidedText(content, Qt.TextElideMode.ElideRight, int(text_w))
+        text_w = max(40, text_w)
+        flags = int(Qt.TextFlag.TextWordWrap)
+        content_br = content_fm.boundingRect(QRect(0, 0, int(text_w), 1000), flags, content)
+        content_h = content_br.height()
 
         nick_h = nick_fm.height() if self.engine.show_nickname and item.nickname else 0
-        content_h = content_fm.height() if content else 0
         total_h = padding * 2 + nick_h + 2 + content_h
         total_h = max(total_h, avatar_size + padding * 2)
 
@@ -501,7 +558,8 @@ class DanmuOverlay(QWidget):
         text_y += nick_h + 2
         painter.setPen(QPen(self.theme["text"]))
         painter.setFont(content_font)
-        painter.drawText(int(text_x), int(text_y), content_elided)
+        content_rect = QRect(int(text_x), int(text_y), int(text_w), int(total_h - text_y - padding))
+        painter.drawText(content_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop | Qt.TextFlag.TextWordWrap, content)
 
         painter.setFont(self.font)
         return total_h
