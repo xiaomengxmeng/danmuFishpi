@@ -671,28 +671,15 @@ class DanmuOverlay(QWidget):
             p.setRenderHint(QPainter.RenderHint.TextAntialiasing)
             p.setFont(self.font)
 
-            text_y = self.font_metrics.ascent() + 5
             text_x = padding
 
-            # Draw avatar
-            if self._effective_show_avatar() and item.nickname:
-                self._draw_avatar(p, text_x, 5, avatar_size, item.nickname, item.avatar_url)
-                text_x += avatar_size + 8
+            # Vertical offset for text block (images are drawn above text, web-style)
+            text_offset = image_block_h if (show_images and image_block_h > 0) else 0
 
-            # Draw nickname
-            if self.engine.show_nickname and item.nickname:
-                self._draw_text_with_outline(p, nick_text, text_x, text_y,
-                                             self._nickname_color())
-                text_x += self.font_metrics.horizontalAdvance(nick_text) + 8
-
-            # Draw content (preserving hard line breaks)
-            text_color = self.theme["red_packet"] if item.is_red_packet else self.theme["text"]
-            self._draw_text_block(p, text_lines, text_x, text_y, text_color)
-
-            # Draw images below text
+            # 1. Draw images at top (web-style: image above text)
             if show_images:
                 img_x = padding
-                img_y = text_height
+                img_y = padding
                 row_h = 0
                 for url in img_urls[:3]:
                     cached = self._image_cache.get(url)
@@ -709,6 +696,23 @@ class DanmuOverlay(QWidget):
                     self._draw_inline_image(p, img_x, img_y, url, image_max_h)
                     img_x += dw + image_gap
                     row_h = max(row_h, dh)
+
+            # 2. Draw avatar (below images)
+            if self._effective_show_avatar() and item.nickname:
+                self._draw_avatar(p, text_x, text_offset + 5, avatar_size, item.nickname, item.avatar_url)
+                text_x += avatar_size + 8
+
+            # 3. Draw nickname
+            if self.engine.show_nickname and item.nickname:
+                self._draw_text_with_outline(p, nick_text, text_x,
+                                             text_offset + self.font_metrics.ascent() + 5,
+                                             self._nickname_color())
+                text_x += self.font_metrics.horizontalAdvance(nick_text) + 8
+
+            # 4. Draw content text (below images)
+            text_color = self.theme["red_packet"] if item.is_red_packet else self.theme["text"]
+            self._draw_text_block(p, text_lines, text_x,
+                                  text_offset + self.font_metrics.ascent() + 5, text_color)
         finally:
             p.end()
 
@@ -873,15 +877,38 @@ class DanmuOverlay(QWidget):
         painter.setBrush(self.theme["card_bg"])
         painter.drawRoundedRect(QRectF(x, y, w, total_h), 8, 8)
 
-        # Draw avatar
+        # Vertical top for text area (images drawn above text, web-style)
+        text_area_top = y + padding + image_block_h if (show_images and image_block_h > 0) else y + padding
+
+        # Draw images at top (web-style: image above text)
+        if show_images:
+            img_x = x + padding
+            img_y = y + padding
+            row_h = 0
+            for url in img_urls[:3]:
+                cached = self._image_cache.get(url)
+                if cached and not cached.isNull():
+                    scale = min(image_max_h / cached.height(), image_max_h / cached.width(), 1.0)
+                    dw = int(cached.width() * scale)
+                    dh = int(cached.height() * scale)
+                else:
+                    dw = dh = image_max_h
+                if img_x + dw > x + text_w + padding and img_x > x + padding:
+                    img_x = x + padding
+                    img_y += row_h + image_gap
+                    row_h = 0
+                self._draw_inline_image(painter, img_x, img_y, url, image_max_h)
+                img_x += dw + image_gap
+                row_h = max(row_h, dh)
+
+        # Draw avatar (below images)
         text_x = x + padding
         if self._effective_show_avatar() and item.nickname:
-            self._draw_avatar(painter, text_x, y + padding + (total_h - padding * 2 - avatar_size) / 2,
-                              avatar_size, item.nickname, item.avatar_url)
+            self._draw_avatar(painter, text_x, text_area_top, avatar_size, item.nickname, item.avatar_url)
             text_x += avatar_size + gap
 
         # Draw nickname
-        text_y = y + padding + nick_fm.ascent()
+        text_y = text_area_top + nick_fm.ascent()
         if self.engine.show_nickname and item.nickname:
             painter.setPen(QPen(self._nickname_color()))
             painter.setFont(nick_font)
@@ -893,27 +920,6 @@ class DanmuOverlay(QWidget):
         painter.setFont(content_font)
         content_color = self.theme["red_packet"] if item.is_red_packet else self.theme["text"]
         self._draw_text_block(painter, content_lines, text_x, text_y, content_color, content_fm)
-
-        # Draw images below text
-        if show_images:
-            img_x = text_x
-            img_y = text_y + content_h + padding
-            row_h = 0
-            for url in img_urls[:3]:
-                cached = self._image_cache.get(url)
-                if cached and not cached.isNull():
-                    scale = min(image_max_h / cached.height(), image_max_h / cached.width(), 1.0)
-                    dw = int(cached.width() * scale)
-                    dh = int(cached.height() * scale)
-                else:
-                    dw = dh = image_max_h
-                if img_x + dw > text_x + text_w and img_x > text_x:
-                    img_x = text_x
-                    img_y += row_h + image_gap
-                    row_h = 0
-                self._draw_inline_image(painter, img_x, img_y, url, image_max_h)
-                img_x += dw + image_gap
-                row_h = max(row_h, dh)
 
         painter.setFont(self.font)
         return total_h
@@ -985,13 +991,37 @@ class DanmuOverlay(QWidget):
         painter.setBrush(self.theme["card_bg"])
         painter.drawRoundedRect(QRectF(x, y, w, total_h), 12, 12)
 
+        # Vertical top for text area (images drawn above text, web-style)
+        text_area_top = y + padding + image_block_h if (show_images and image_block_h > 0) else y + padding
+
+        # Draw images at top
+        if show_images:
+            img_x = x + padding
+            img_y = y + padding
+            row_h = 0
+            for url in img_urls[:3]:
+                cached = self._image_cache.get(url)
+                if cached and not cached.isNull():
+                    scale = min(image_max_h / cached.height(), image_max_h / cached.width(), 1.0)
+                    dw = int(cached.width() * scale)
+                    dh = int(cached.height() * scale)
+                else:
+                    dw = dh = image_max_h
+                if img_x + dw > x + text_w + padding and img_x > x + padding:
+                    img_x = x + padding
+                    img_y += row_h + image_gap
+                    row_h = 0
+                self._draw_inline_image(painter, img_x, img_y, url, image_max_h)
+                img_x += dw + image_gap
+                row_h = max(row_h, dh)
+
         text_x = x + padding
         if self._effective_show_avatar() and item.nickname:
-            self._draw_avatar(painter, text_x, y + padding + (total_h - padding * 2 - avatar_size) / 2,
+            self._draw_avatar(painter, text_x, text_area_top,
                               avatar_size, item.nickname, item.avatar_url)
             text_x += avatar_size + gap
 
-        text_y = y + padding + nick_fm.ascent()
+        text_y = text_area_top + nick_fm.ascent()
         if self.engine.show_nickname and item.nickname:
             painter.setPen(QPen(self._nickname_color()))
             painter.setFont(nick_font)

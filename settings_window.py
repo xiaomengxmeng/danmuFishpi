@@ -6,8 +6,8 @@ PyQt6-based settings panel styled to match the original GitHub-style drawer.
 import logging
 from typing import Callable
 
-from PyQt6.QtCore import Qt, pyqtSignal, QRectF, QPropertyAnimation, QEasingCurve
-from PyQt6.QtGui import QFont, QPainter, QColor, QPen, QBrush, QLinearGradient
+from PyQt6.QtCore import Qt, pyqtSignal, QRectF, QTimer
+from PyQt6.QtGui import QFont, QPainter, QColor, QPen, QBrush
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QWidget, QLabel, QLineEdit,
     QPushButton, QSlider, QCheckBox, QButtonGroup, QComboBox, QMessageBox,
@@ -26,29 +26,22 @@ class ToggleSwitch(QWidget):
     """Custom iOS-style toggle switch widget.
 
     Draws a pill-shaped toggle with a circular knob that slides left/right.
-    Smooth animation on state change.
+    Uses QTimer-based tween for smooth animation.
     """
 
     toggled = pyqtSignal(bool)
+    _ANIM_DURATION = 150  # ms
 
     def __init__(self, checked: bool = False, parent=None):
         super().__init__(parent)
         self._checked = checked
-        self._anim_progress = 1.0 if checked else 0.0
+        self._progress = 1.0 if checked else 0.0  # 0.0=off, 1.0=on
+        self._anim_timer = QTimer(self)
+        self._anim_timer.timeout.connect(self._anim_tick)
+        self._anim_from = self._progress
+        self._anim_to = self._progress
+        self._anim_start_ms = 0
         self.setFixedSize(44, 24)
-
-        self._anim = QPropertyAnimation(self, b"anim_progress", self)
-        self._anim.setDuration(200)
-        self._anim.setEasingCurve(QEasingCurve.Type.OutCubic)
-
-    def _get_anim_progress(self) -> float:
-        return self._anim_progress
-
-    def _set_anim_progress(self, v: float):
-        self._anim_progress = v
-        self.update()
-
-    anim_progress = property(_get_anim_progress, _set_anim_progress)
 
     def isChecked(self) -> bool:
         return self._checked
@@ -56,18 +49,37 @@ class ToggleSwitch(QWidget):
     def setChecked(self, checked: bool):
         self._checked = checked
         target = 1.0 if checked else 0.0
-        self._anim.stop()
-        self._anim.setStartValue(self._anim_progress)
-        self._anim.setEndValue(target)
-        self._anim.start()
+        self._anim_timer.stop()
+        self._progress = target
+        self._anim_from = target
+        self._anim_to = target
+        self.update()
+
+    def _start_anim(self, to_on: bool):
+        self._anim_timer.stop()
+        self._anim_from = self._progress
+        self._anim_to = 1.0 if to_on else 0.0
+        self._anim_start_ms = QTimer().remainingTime()  # dummy call to get a timestamp
+        from PyQt6.QtCore import QElapsedTimer
+        self._anim_elapsed = QElapsedTimer()
+        self._anim_elapsed.start()
+        self._anim_timer.start(16)
+
+    def _anim_tick(self):
+        elapsed = self._anim_elapsed.elapsed()
+        if elapsed >= self._ANIM_DURATION:
+            self._anim_timer.stop()
+            self._progress = self._anim_to
+        else:
+            t = elapsed / self._ANIM_DURATION
+            # Ease-out cubic
+            t = 1.0 - (1.0 - t) ** 3
+            self._progress = self._anim_from + (self._anim_to - self._anim_from) * t
+        self.update()
 
     def mousePressEvent(self, event):
         self._checked = not self._checked
-        target = 1.0 if self._checked else 0.0
-        self._anim.stop()
-        self._anim.setStartValue(self._anim_progress)
-        self._anim.setEndValue(target)
-        self._anim.start()
+        self._start_anim(self._checked)
         self.toggled.emit(self._checked)
         super().mousePressEvent(event)
 
@@ -77,32 +89,33 @@ class ToggleSwitch(QWidget):
 
         w = self.width()
         h = self.height()
-        r = h / 2.0  # pill radius
+        r = h / 2.0
 
-        # Track background
-        track_color = QColor(58, 63, 71) if self._anim_progress < 0.5 else \
-            QColor(int(58 + (35 - 58) * (self._anim_progress - 0.5) * 2),
-                   int(63 + (134 - 63) * (self._anim_progress - 0.5) * 2),
-                   int(71 + (54 - 71) * (self._anim_progress - 0.5) * 2))
+        # Interpolate track color based on progress
+        r_on, g_on, b_on = 35, 134, 54      # checked green (#238636)
+        r_off, g_off, b_off = 74, 79, 87    # unchecked gray (#4a4f57)
+        p = self._progress
+        r_color = int(r_off + (r_on - r_off) * p)
+        g_color = int(g_off + (g_on - g_off) * p)
+        b_color = int(b_off + (b_on - b_off) * p)
+
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QBrush(track_color))
+        painter.setBrush(QBrush(QColor(r_color, g_color, b_color)))
         painter.drawRoundedRect(QRectF(0, 0, w, h), r, r)
 
-        # Knob position
+        # Knob
         knob_margin = 2
         knob_size = h - knob_margin * 2
         max_x = w - knob_size - knob_margin
-        knob_x = knob_margin + (max_x - knob_margin) * self._anim_progress
+        knob_x = knob_margin + (max_x - knob_margin) * self._progress
         knob_y = knob_margin
 
-        # Knob shadow
-        shadow_color = QColor(0, 0, 0, 40)
-        painter.setBrush(QBrush(shadow_color))
+        # Shadow
+        painter.setBrush(QBrush(QColor(0, 0, 0, 40)))
         painter.drawEllipse(QRectF(knob_x + 0.5, knob_y + 0.5, knob_size, knob_size))
 
         # Knob
-        knob_color = QColor(255, 255, 255)
-        painter.setBrush(QBrush(knob_color))
+        painter.setBrush(QBrush(QColor(255, 255, 255)))
         painter.drawEllipse(QRectF(knob_x, knob_y, knob_size, knob_size))
 
         painter.end()
