@@ -247,7 +247,7 @@ class DanmuOverlay(QWidget):
         if risk:
             logger.warning(
                 "Detected a foreground exclusive-fullscreen window; "
-                "overlay may not be visible. Try borderless/windowed fullscreen."
+                "overlay may not be visible. Switch the game to borderless/windowed fullscreen."
             )
         return risk
 
