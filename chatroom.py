@@ -23,7 +23,7 @@ USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko)"
 )
-CLIENT_VERSION = "小梦的科技/v1.0.0"
+CLIENT_VERSION = "Python/小梦的科技v1.0.0"
 
 
 class Connection:
@@ -132,9 +132,15 @@ class Connection:
         """Called when a message is received."""
         try:
             msg = json.loads(raw_data)
+            msg_type = msg.get("type", "")
+            nickname = msg.get("userNickname") or msg.get("userName", "")
+            content = msg.get("content", "")[:60]
             processed = process_message(msg)
             if processed:
+                logger.info(f"Recv msg type={msg_type} from={nickname}: {content}")
                 self.on_message(processed)
+            else:
+                logger.debug(f"Filtered msg type={msg_type} from={nickname}: {content}")
         except json.JSONDecodeError:
             logger.warning(f"Invalid JSON: {raw_data[:100]}")
         except Exception as e:

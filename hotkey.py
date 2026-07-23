@@ -37,14 +37,18 @@ class NativeHotkeyFilter(QObject, QAbstractNativeEventFilter):
 
     def nativeEventFilter(self, event_type, message):
         et = event_type.toString() if hasattr(event_type, "toString") else str(event_type)
-        # Only log non-timer messages to avoid spam
-        if et != "windows_timer_MSG":
+        # Log native messages that might be hotkey events
+        if et not in ("windows_timer_MSG",):
             logger.debug(f"nativeEventFilter event_type={et}")
         if et in ("windows_generic_MSG", "windows_dispatcher_MSG"):
-            msg_ptr = ctypes.cast(int(message), ctypes.POINTER(wintypes.MSG))
-            msg = msg_ptr.contents
+            try:
+                msg_ptr = ctypes.cast(int(message), ctypes.POINTER(wintypes.MSG))
+                msg = msg_ptr.contents
+            except Exception:
+                return False, 0
             if msg.message == WM_HOTKEY:
                 logger.info(f"WM_HOTKEY received (id={msg.wParam})")
+                print(f"[danmuFishpi] WM_HOTKEY received id={msg.wParam}", flush=True)
                 self.triggered.emit()
                 return True, 0
         return False, 0

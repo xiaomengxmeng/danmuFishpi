@@ -6,9 +6,12 @@ Handles three display modes:
 - bottom: bottom-left bubble list (max 6, 8s timeout)
 """
 
+import logging
 import time
 from dataclasses import dataclass, field
 from typing import Optional
+
+logger = logging.getLogger("danmuFishpi.engine")
 
 
 @dataclass
@@ -142,6 +145,8 @@ class DanmuEngine:
             is_red_packet=msg.get("is_red_packet", False),
             add_time=time.time(),
         )
+
+        logger.info(f"Engine add message from={item.nickname}: {item.content[:40]}")
 
         if self.mode == "scrolling":
             return self._add_scrolling(item)

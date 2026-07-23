@@ -116,7 +116,9 @@ class App:
         self.hotkey_mgr = HotkeyManager()
         self.hotkey_mgr.install_filter()
         self._register_hotkey_with_fallback()
-        logger.info(f"Current global hotkey: {self.hotkey_mgr._current_hotkey or 'none'}")
+        active_hotkey = self.hotkey_mgr._current_hotkey or "未注册"
+        logger.info(f"Current global hotkey: {active_hotkey}")
+        self.tray.show_message("热键已就绪", f"按 {active_hotkey} 打开输入框\n也可右键托盘 → 发送消息")
 
         # Settings dialog (created lazily)
         self.settings_dialog = None
@@ -157,24 +159,30 @@ class App:
     def _on_new_message(self, msg: dict) -> None:
         """Handle a new chatroom message (called on main thread)."""
         user_id = msg.get("user_id", "")
+        nickname = msg.get("nickname", user_id)
+        content = msg.get("content", "")[:40]
 
         # Block list filter
         if user_id and user_id in self.config.display.blocked_user_ids:
+            logger.info(f"Blocked message from {nickname}: {content}")
             return
 
         # Red packet filter
         if msg.get("is_red_packet") and not self.config.display.show_red_packet:
+            logger.info(f"Filtered red packet from {nickname}: {content}")
             return
 
         # Special follow notification
-        if (user_id and user_id in self.config.display.followed_user_ids
-                and self.config.display.play_sound):
-            self.tray.show_message(
-                "特别关注",
-                f"{msg.get('nickname', user_id)}: {msg.get('content', '')[:60]}",
-            )
+        if user_id and user_id in self.config.display.followed_user_ids:
+            logger.info(f"Special follow message from {nickname}: {content}")
+            if self.config.display.play_sound:
+                self.tray.show_message(
+                    "特别关注",
+                    f"{msg.get('nickname', user_id)}: {msg.get('content', '')[:60]}",
+                )
 
         self.overlay.add_message(msg)
+        logger.info(f"Displayed message from {nickname}: {content}")
 
     def _on_login_result(self, success: bool, api_key: str, error: str) -> None:
         """Handle login result (called on main thread)."""
@@ -279,7 +287,8 @@ class App:
 
     def show_input_box(self) -> None:
         """Show the floating message input box (bound to global hotkey)."""
-        print("[danmuFishpi] 显示输入框", flush=True)
+        active_hotkey = self.hotkey_mgr._current_hotkey or "未注册"
+        print(f"[danmuFishpi] 热键 {active_hotkey} 被按下，准备显示输入框", flush=True)
         if self.input_box is None:
             self.input_box = InputBox(theme=self.config.theme)
             self.input_box.message_sent.connect(self.send_message)
@@ -289,7 +298,9 @@ class App:
         self.overlay.set_click_through(False)
         self.input_box.set_theme(self.config.theme)
         self.input_box.show_at_bottom()
+        self.input_box.raise_()
         self.input_box.activateWindow()
+        print("[danmuFishpi] 输入框已显示", flush=True)
 
     def hide_input_box(self) -> None:
         """Hide the floating input box and restore overlay click-through."""
@@ -308,19 +319,25 @@ class App:
             if hk and hk not in candidates:
                 candidates.append(hk)
 
+        def _hotkey_wrapper():
+            hk = self.hotkey_mgr._current_hotkey or "未知"
+            print(f"[danmuFishpi] 全局热键 {hk} 触发", flush=True)
+            self.tray.show_message("热键触发", f"{hk} 已触发，正在打开输入框")
+            self.show_input_box()
+
         for hotkey in candidates:
-            if self.hotkey_mgr.register(hotkey, self.show_input_box):
+            if self.hotkey_mgr.register(hotkey, _hotkey_wrapper):
                 if hotkey != configured:
                     self.config.hotkey = hotkey
                     cfg_module.save(self.config, self.config_path)
                     self.tray.show_message(
-                        "弹幕鱼排",
+                        "Py小梦的科技",
                         f"快捷键 '{configured}' 被占用，已自动切换为 '{hotkey}'。",
                     )
                 return
 
         self.tray.show_message(
-            "弹幕鱼排",
+            "Py小梦的科技",
             f"所有候选快捷键（{', '.join(candidates)}）均注册失败，\n"
             "可能已有其他程序占用了这些组合键。请在设置中手动更换。",
         )
