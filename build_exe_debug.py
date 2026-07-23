@@ -1,4 +1,4 @@
-"""Build a standalone executable with PyInstaller."""
+"""Build a console executable for debugging (keeps terminal output visible)."""
 
 import os
 import subprocess
@@ -13,9 +13,9 @@ def main():
         sys.executable,
         "-m",
         "PyInstaller",
-        "--name", "弹幕鱼排",
+        "--name", "弹幕鱼排-debug",
         "--onefile",
-        "--windowed",
+        "--console",
         "--noconfirm",
         "--clean",
         "--hidden-import", "PyQt6.sip",
@@ -30,10 +30,9 @@ def main():
         "main.py",
     ]
 
-    print("Building executable...")
-    print(" ".join(cmd))
+    print("Building debug executable...")
     subprocess.run(cmd, check=True)
-    print(f"\nBuild complete. Executable: {os.path.join(here, 'dist', '弹幕鱼排.exe')}")
+    print(f"\nDebug build complete: {os.path.join(here, 'dist', '弹幕鱼排-debug.exe')}")
 
 
 if __name__ == "__main__":

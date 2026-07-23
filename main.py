@@ -8,6 +8,7 @@ import logging
 import os
 import sys
 import threading
+import traceback
 
 from PyQt6.QtCore import Qt, QObject, pyqtSignal, QTimer
 from PyQt6.QtGui import QIcon, QPixmap, QPainter, QColor, QFont
@@ -24,11 +25,59 @@ from settings_window import SettingsDialog
 from input_box import InputBox
 from notification import NotificationManager
 
+
+_LOG_DIR = os.path.join(os.path.expanduser("~"), "AppData", "Roaming", "DanmuFishpi", "logs")
+os.makedirs(_LOG_DIR, exist_ok=True)
+_LOG_FILE = os.path.join(_LOG_DIR, "app.log")
+
+_handlers: list[logging.Handler] = [logging.FileHandler(_LOG_FILE, encoding="utf-8", mode="a")]
+
+# In a windowed (--noconsole) PyInstaller build, sys.stdout/stderr are None.
+# Only attach a stream handler when a real console is available, and force UTF-8
+# on Windows to avoid 'gbk' codec errors for Unicode log messages.
+if getattr(sys, "stdout", None) is not None:
+    if sys.platform == "win32":
+        try:
+            import io
+            sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+            sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+    _handlers.append(logging.StreamHandler(sys.stdout))
+else:
+    # Windowed PyInstaller build: replace None stdout/stderr with a dummy so
+    # print() and any library that writes to stdout does not crash.
+    import io
+    sys.stdout = io.StringIO()
+    sys.stderr = io.StringIO()
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    handlers=_handlers,
 )
 logger = logging.getLogger("danmuFishpi")
+
+
+def _log_unhandled_exception(exc_type, exc_value, exc_traceback):
+    if issubclass(exc_type, KeyboardInterrupt):
+        sys.__excepthook__(exc_type, exc_value, exc_traceback)
+        return
+    logger.error("Unhandled exception: %s", exc_value)
+    logger.error("".join(traceback.format_exception(exc_type, exc_value, exc_traceback)))
+
+
+sys.excepthook = _log_unhandled_exception
+
+
+def _log_thread_exception(args):
+    logger.error("Unhandled exception in thread %s: %s", args.thread, args.exc_value)
+    if args.exc_traceback:
+        logger.error("".join(traceback.format_exception(args.exc_type, args.exc_value, args.exc_traceback)))
+
+
+if hasattr(threading, "excepthook"):
+    threading.excepthook = _log_thread_exception
 
 
 class MessageBridge(QObject):
@@ -293,12 +342,19 @@ class App:
     def send_message(self, content: str) -> None:
         """Send a message to the chatroom."""
         with self.conn_lock:
-            if not self.conn:
+            conn = self.conn
+            if not conn:
+                logger.warning("Cannot send message: not connected")
                 return
+
         def _send():
-            success, error = self.conn.send_message(content)
-            if not success:
-                logger.error(f"Send failed: {error}")
+            try:
+                success, error = conn.send_message(content)
+                if not success:
+                    logger.error(f"Send failed: {error}")
+            except Exception as e:
+                logger.exception(f"Exception while sending message: {e}")
+
         threading.Thread(target=_send, daemon=True).start()
 
     def _on_chatroom_status(self, connected: bool) -> None:
