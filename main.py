@@ -345,6 +345,8 @@ class App:
                         "弹幕鱼排",
                         f"快捷键 '{configured}' 被占用，已自动切换为 '{hotkey}'。",
                     )
+                if self.settings_dialog:
+                    self.settings_dialog.set_active_hotkey(hotkey)
                 return
 
         from PyQt6.QtWidgets import QMessageBox
@@ -368,10 +370,12 @@ class App:
             # Sync current connection state
             is_connected = self.conn.is_connected if self.conn else False
             self.settings_dialog.set_connected(is_connected)
+            self.settings_dialog.set_active_hotkey(self.hotkey_mgr._current_hotkey)
 
         # Disable click-through while settings are open
         self.overlay.set_click_through(False)
         self.settings_dialog.show()
+        self.settings_dialog.set_active_hotkey(self.hotkey_mgr._current_hotkey)
         self.settings_dialog.raise_()
         self.settings_dialog.activateWindow()
 

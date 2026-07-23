@@ -538,6 +538,10 @@ class SettingsDialog(QDialog):
         self.input_hotkey.setPlaceholderText("例如: alt+space")
         layout.addWidget(self.input_hotkey)
 
+        self.lbl_active_hotkey = QLabel("当前生效热键: 未注册")
+        self.lbl_active_hotkey.setObjectName("hintLabel")
+        layout.addWidget(self.lbl_active_hotkey)
+
         hint = QLabel("按下快捷键可在任何位置打开消息输入框。如果设置后无效，说明该组合键已被其他程序占用，请换一个。输入文字后按 Enter 发送，按 Esc 关闭。")
         hint.setWordWrap(True)
         hint.setStyleSheet("color: #8b949e; font-size: 11px; line-height: 1.6;")
@@ -790,6 +794,11 @@ class SettingsDialog(QDialog):
         self.config = config
         self._apply_theme()
         self._populate_form()
+
+    def set_active_hotkey(self, hotkey: str):
+        self.active_hotkey = hotkey or "未注册"
+        if hasattr(self, "lbl_active_hotkey"):
+            self.lbl_active_hotkey.setText(f"当前生效热键: {self.active_hotkey}")
 
     def keyPressEvent(self, event):
         if self.input_hotkey.hasFocus() and self.input_hotkey.text() == "":
