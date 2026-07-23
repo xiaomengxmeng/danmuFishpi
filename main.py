@@ -460,7 +460,7 @@ class App:
 
     def _on_config_saved(self, display_config: dict) -> None:
         """Handle config save from settings dialog."""
-        self.config.display.danmu_mode = "scrolling"
+        self.config.display.danmu_mode = display_config.get("danmuMode", self.config.display.danmu_mode)
         self.config.display.show_avatar = display_config.get("showAvatar", self.config.display.show_avatar)
         self.config.display.show_nickname = display_config.get("showNickname", self.config.display.show_nickname)
         self.config.display.show_image = display_config.get("showImage", self.config.display.show_image)
@@ -481,6 +481,7 @@ class App:
         self.config.display.danmu_opacity = display_config.get("danmuOpacity", self.config.display.danmu_opacity)
         self.config.display.font_size = display_config.get("fontSize", self.config.display.font_size)
         self.config.display.font_family = display_config.get("fontFamily", self.config.display.font_family)
+        self.config.display.floating_corner = display_config.get("floatingCorner", self.config.display.floating_corner)
 
         cfg_module.save(self.config, self.config_path)
 

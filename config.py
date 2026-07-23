@@ -72,7 +72,7 @@ class Account:
 
 @dataclass
 class Display:
-    danmu_mode: str = "scrolling"      # scrolling | floating | bottom
+    danmu_mode: str = "scrolling"      # scrolling | floating
     show_avatar: bool = True
     show_nickname: bool = True
     show_image: bool = True
@@ -87,7 +87,8 @@ class Display:
     notify_login: bool = True
     notify_follow: bool = True
     danmu_speed: int = 5               # 1-10
-    danmu_area: str = "fullscreen"     # fullscreen | topHalf | bottomHalf
+    danmu_area: str = "fullscreen"     # fullscreen | topHalf | bottomHalf (scrolling only)
+    floating_corner: str = "topRight"  # topLeft | topRight | bottomLeft | bottomRight
     danmu_width: int = 100             # 30-100 percentage
     danmu_height: int = 100            # 30-100 percentage
     danmu_opacity: int = 100           # 30-100 percentage
@@ -140,6 +141,7 @@ def config_to_dict(cfg: Config) -> dict:
         "notifyFollow": disp["notify_follow"],
         "danmuSpeed": disp["danmu_speed"],
         "danmuArea": disp["danmu_area"],
+        "floatingCorner": disp["floating_corner"],
         "danmuWidth": disp["danmu_width"],
         "danmuHeight": disp["danmu_height"],
         "danmuOpacity": disp["danmu_opacity"],
@@ -180,6 +182,7 @@ def config_from_dict(d: dict) -> Config:
         notify_follow=disp.get("notifyFollow", True),
         danmu_speed=disp.get("danmuSpeed", 5),
         danmu_area=disp.get("danmuArea", "fullscreen"),
+        floating_corner=disp.get("floatingCorner", "topRight"),
         danmu_width=disp.get("danmuWidth", 100),
         danmu_height=disp.get("danmuHeight", 100),
         danmu_opacity=disp.get("danmuOpacity", 100),

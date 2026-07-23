@@ -57,6 +57,7 @@ class DanmuEngine:
         self.font_family: str = "Microsoft YaHei"
         self.danmu_speed: int = 5
         self.danmu_area: str = "fullscreen"
+        self.floating_corner: str = "topRight"
         self.show_avatar: bool = True
         self.show_nickname: bool = True
         self.show_image: bool = True
@@ -83,6 +84,7 @@ class DanmuEngine:
         self.font_family = display_config.get("fontFamily", self.font_family)
         self.danmu_speed = display_config.get("danmuSpeed", self.danmu_speed)
         self.danmu_area = display_config.get("danmuArea", self.danmu_area)
+        self.floating_corner = display_config.get("floatingCorner", self.floating_corner)
         self.show_avatar = display_config.get("showAvatar", self.show_avatar)
         self.show_nickname = display_config.get("showNickname", self.show_nickname)
         self.show_image = display_config.get("showImage", self.show_image)

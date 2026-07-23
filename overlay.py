@@ -321,8 +321,6 @@ class DanmuOverlay(QWidget):
                 self._paint_scrolling(painter)
             elif self.engine.mode == "floating":
                 self._paint_floating(painter)
-            elif self.engine.mode == "bottom":
-                self._paint_bottom(painter)
         except Exception as e:
             logger.error(f"paintEvent error: {e}", exc_info=True)
         finally:
@@ -599,7 +597,7 @@ class DanmuOverlay(QWidget):
         if item.has_image and not self._effective_show_image():
             text = "[图片] " + text
 
-        # Prefix size (avatar + nickname)
+        # Prefix size (avatar + nickname) - one line
         prefix_w = 0
         if self._effective_show_avatar() and item.nickname:
             prefix_w += avatar_size + 8
@@ -612,36 +610,39 @@ class DanmuOverlay(QWidget):
         max_lines = None
         if self.engine.truncate_long_messages:
             max_lines = self.engine.max_message_lines
-        available_text_w = max(100, max_width - prefix_w - padding * 2)
+        available_text_w = max(100, max_width - padding * 2)
         text_lines = self._wrap_text(text, self.font_metrics, available_text_w, max_lines)
-        # If truncated, add an ellipsis hint
         total_raw_lines = self._wrap_text(text, self.font_metrics, available_text_w)
         is_truncated = max_lines is not None and len(total_raw_lines) > max_lines
         if is_truncated:
             text_lines.append("...")
-        text_height = len(text_lines) * self.font_metrics.height() + (len(text_lines) - 1) * line_gap + 10
+        line_h = self.font_metrics.height()
+        prefix_line_h = line_h + 5  # one line for avatar + nickname
+        text_content_h = len(text_lines) * line_h + (len(text_lines) - 1) * line_gap
 
         longest_line_w = max(
             (self.font_metrics.horizontalAdvance(line) for line in text_lines),
             default=0,
         )
-        width = max(1, prefix_w + longest_line_w + padding * 2)
-        width = min(width, max_width)
+        content_width = max(1, prefix_w + longest_line_w + padding * 2)
+        content_width = min(content_width, max_width)
 
-        # Image block (placed below text)
+        # Image block
         image_block_h = 0
+        have_loaded_images = False
         if show_images:
             row_x = 0
             row_h = 0
-            for url in img_urls[:3]:  # up to 3 images
+            for url in img_urls[:3]:
                 cached = self._image_cache.get(url)
                 if cached and not cached.isNull():
+                    have_loaded_images = True
                     scale = min(image_max_h / cached.height(), image_max_h / cached.width(), 1.0)
                     dw = int(cached.width() * scale)
                     dh = int(cached.height() * scale)
                 else:
                     dw = dh = image_max_h
-                if row_x + dw > width - padding * 2 and row_x > 0:
+                if row_x + dw > content_width - padding * 2 and row_x > 0:
                     image_block_h += row_h + image_gap
                     row_x = 0
                     row_h = 0
@@ -649,19 +650,21 @@ class DanmuOverlay(QWidget):
                 row_h = max(row_h, dh)
             image_block_h += row_h
             if image_block_h > 0:
-                image_block_h += padding  # gap between text and images
+                image_block_h += padding  # gap between images and text
 
-        height = text_height + image_block_h
+        # Total height: prefix_line + image_block + text_content + padding
+        # Layout: [Avatar] [Nickname]  →  [Images]  →  [Text]
+        height = prefix_line_h + image_block_h + text_content_h
 
-        if width <= 0 or height <= 0:
+        if content_width <= 0 or height <= 0:
             return QPixmap()
 
         # Update item dimensions
-        item.width = width
+        item.width = content_width
         item.height = height
 
         dpr = self.devicePixelRatio()
-        target_pm = QPixmap(int(width * dpr), int(height * dpr))
+        target_pm = QPixmap(int(content_width * dpr), int(height * dpr))
         target_pm.setDevicePixelRatio(dpr)
         target_pm.fill(Qt.GlobalColor.transparent)
 
@@ -671,15 +674,23 @@ class DanmuOverlay(QWidget):
             p.setRenderHint(QPainter.RenderHint.TextAntialiasing)
             p.setFont(self.font)
 
-            text_x = padding
+            cur_x = padding
+            cur_y = 0
 
-            # Vertical offset for text block (images are drawn above text, web-style)
-            text_offset = image_block_h if (show_images and image_block_h > 0) else 0
+            # 1. Draw avatar + nickname (first line, at top)
+            if self._effective_show_avatar() and item.nickname:
+                self._draw_avatar(p, cur_x, 5, avatar_size, item.nickname, item.avatar_url)
+                cur_x += avatar_size + 8
+            if self.engine.show_nickname and item.nickname:
+                self._draw_text_with_outline(p, nick_text, cur_x,
+                                             self.font_metrics.ascent() + 5,
+                                             self._nickname_color())
+                cur_x += self.font_metrics.horizontalAdvance(nick_text) + 8
 
-            # 1. Draw images at top (web-style: image above text)
-            if show_images:
+            # 2. Draw images (below first line, only if loaded)
+            if show_images and have_loaded_images:
                 img_x = padding
-                img_y = padding
+                img_y = prefix_line_h
                 row_h = 0
                 for url in img_urls[:3]:
                     cached = self._image_cache.get(url)
@@ -689,7 +700,7 @@ class DanmuOverlay(QWidget):
                         dh = int(cached.height() * scale)
                     else:
                         dw = dh = image_max_h
-                    if img_x + dw > width - padding and img_x > padding:
+                    if img_x + dw > content_width - padding and img_x > padding:
                         img_x = padding
                         img_y += row_h + image_gap
                         row_h = 0
@@ -697,22 +708,10 @@ class DanmuOverlay(QWidget):
                     img_x += dw + image_gap
                     row_h = max(row_h, dh)
 
-            # 2. Draw avatar (below images)
-            if self._effective_show_avatar() and item.nickname:
-                self._draw_avatar(p, text_x, text_offset + 5, avatar_size, item.nickname, item.avatar_url)
-                text_x += avatar_size + 8
-
-            # 3. Draw nickname
-            if self.engine.show_nickname and item.nickname:
-                self._draw_text_with_outline(p, nick_text, text_x,
-                                             text_offset + self.font_metrics.ascent() + 5,
-                                             self._nickname_color())
-                text_x += self.font_metrics.horizontalAdvance(nick_text) + 8
-
-            # 4. Draw content text (below images)
+            # 3. Draw text content (below images)
+            text_y = prefix_line_h + image_block_h + self.font_metrics.ascent()
             text_color = self.theme["red_packet"] if item.is_red_packet else self.theme["text"]
-            self._draw_text_block(p, text_lines, text_x,
-                                  text_offset + self.font_metrics.ascent() + 5, text_color)
+            self._draw_text_block(p, text_lines, padding, text_y, text_color)
         finally:
             p.end()
 
@@ -763,9 +762,12 @@ class DanmuOverlay(QWidget):
             )
 
     def _paint_floating(self, painter: QPainter) -> None:
-        """Paint floating mode: right-side card list."""
+        """Paint floating mode cards at the configured corner.
+
+        Supports topLeft, topRight, bottomLeft, bottomRight positions.
+        Newest items are stacked inward from the chosen corner.
+        """
         card_w = 280
-        card_h = 0
         card_padding = 10
         card_gap = 6
         max_items = self.engine.max_float
@@ -774,37 +776,39 @@ class DanmuOverlay(QWidget):
         if not items:
             return
 
-        # Draw from bottom up (newest at bottom)
-        y = self.height() - card_padding
-        for item in reversed(items):
-            card_h = self._draw_card(painter, item,
-                                     self.width() - card_w - card_padding,
-                                     y - 60, card_w, 60)
-            y -= card_h + card_gap
-            if y < 0:
-                break
+        corner = self.engine.floating_corner
+        w = self.width()
+        h = self.height()
 
-    def _paint_bottom(self, painter: QPainter) -> None:
-        """Paint bottom mode: bottom-left bubble list."""
-        card_padding = 10
-        card_gap = 4
-        max_w = 600
-        max_items = self.engine.max_bottom
-
-        items = self.engine.float_items[-max_items:]
-        if not items:
-            return
-
-        y = self.height() - card_padding
-        for item in reversed(items):
-            bubble_h = 40
-            self._draw_bubble(painter, item,
-                              card_padding, y - bubble_h,
-                              min(max_w, self.width() - 2 * card_padding),
-                              bubble_h)
-            y -= bubble_h + card_gap
-            if y < 0:
-                break
+        # Determine starting position and stacking direction
+        if corner == "topRight":
+            # Stack downward from top-right corner
+            x = w - card_w - card_padding
+            y = card_padding
+            for item in items:
+                card_h = self._draw_card(painter, item, x, y, card_w, 60)
+                y += card_h + card_gap
+        elif corner == "topLeft":
+            # Stack downward from top-left corner
+            x = card_padding
+            y = card_padding
+            for item in items:
+                card_h = self._draw_card(painter, item, x, y, card_w, 60)
+                y += card_h + card_gap
+        elif corner == "bottomRight":
+            # Stack upward from bottom-right corner
+            x = w - card_w - card_padding
+            y = h - card_padding
+            for item in reversed(items):
+                card_h = self._draw_card(painter, item, x, y - 60, card_w, 60)
+                y -= card_h + card_gap
+        else:  # bottomLeft
+            # Stack upward from bottom-left corner
+            x = card_padding
+            y = h - card_padding
+            for item in reversed(items):
+                card_h = self._draw_card(painter, item, x, y - 60, card_w, 60)
+                y -= card_h + card_gap
 
     def _draw_card(self, painter: QPainter, item: DanmuItem,
                     x: float, y: float, w: float, h: float) -> float:
@@ -844,16 +848,17 @@ class DanmuOverlay(QWidget):
         content_h = len(content_lines) * line_h + (len(content_lines) - 1) * 2
 
         nick_h = nick_fm.height() if self.engine.show_nickname and item.nickname else 0
-        total_h = padding * 2 + nick_h + (line_gap if nick_h else 0) + content_h
 
-        # Add image block height
+        # Image block height
         image_block_h = 0
+        have_loaded_images = False
         if show_images:
             row_x = 0
             row_h = 0
             for url in img_urls[:3]:
                 cached = self._image_cache.get(url)
                 if cached and not cached.isNull():
+                    have_loaded_images = True
                     scale = min(image_max_h / cached.height(), image_max_h / cached.width(), 1.0)
                     dw = int(cached.width() * scale)
                     dh = int(cached.height() * scale)
@@ -877,13 +882,25 @@ class DanmuOverlay(QWidget):
         painter.setBrush(self.theme["card_bg"])
         painter.drawRoundedRect(QRectF(x, y, w, total_h), 8, 8)
 
-        # Vertical top for text area (images drawn above text, web-style)
-        text_area_top = y + padding + image_block_h if (show_images and image_block_h > 0) else y + padding
+        # Layout: avatar+nickname (top line) → images → text
+        text_area_top = y + padding
 
-        # Draw images at top (web-style: image above text)
-        if show_images:
+        # 1. Draw avatar + nickname (same line, at top)
+        cur_x = x + padding
+        if self._effective_show_avatar() and item.nickname:
+            self._draw_avatar(painter, cur_x, text_area_top, avatar_size, item.nickname, item.avatar_url)
+            cur_x += avatar_size + gap
+        text_y = text_area_top + nick_fm.ascent()
+        if self.engine.show_nickname and item.nickname:
+            painter.setPen(QPen(self._nickname_color()))
+            painter.setFont(nick_font)
+            painter.drawText(int(cur_x), int(text_y), item.nickname)
+
+        # 2. Draw images (below avatar+nickname line)
+        images_top = text_area_top + (nick_fm.height() if self.engine.show_nickname and item.nickname else 0) + line_gap
+        if show_images and have_loaded_images:
             img_x = x + padding
-            img_y = y + padding
+            img_y = images_top
             row_h = 0
             for url in img_urls[:3]:
                 cached = self._image_cache.get(url)
@@ -901,25 +918,12 @@ class DanmuOverlay(QWidget):
                 img_x += dw + image_gap
                 row_h = max(row_h, dh)
 
-        # Draw avatar (below images)
-        text_x = x + padding
-        if self._effective_show_avatar() and item.nickname:
-            self._draw_avatar(painter, text_x, text_area_top, avatar_size, item.nickname, item.avatar_url)
-            text_x += avatar_size + gap
-
-        # Draw nickname
-        text_y = text_area_top + nick_fm.ascent()
-        if self.engine.show_nickname and item.nickname:
-            painter.setPen(QPen(self._nickname_color()))
-            painter.setFont(nick_font)
-            painter.drawText(int(text_x), int(text_y), item.nickname)
-
-        # Draw content (wrapped, preserving hard line breaks)
-        text_y += nick_h + line_gap
+        # 3. Draw content text (below images)
+        text_y2 = images_top + image_block_h + content_fm.ascent()
         painter.setPen(QPen(self.theme["text"]))
         painter.setFont(content_font)
         content_color = self.theme["red_packet"] if item.is_red_packet else self.theme["text"]
-        self._draw_text_block(painter, content_lines, text_x, text_y, content_color, content_fm)
+        self._draw_text_block(painter, content_lines, x + padding, text_y2, content_color, content_fm)
 
         painter.setFont(self.font)
         return total_h

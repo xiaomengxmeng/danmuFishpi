@@ -557,11 +557,44 @@ class SettingsDialog(QDialog):
         notify_grid.addWidget(row_notify_follow)
         layout.addLayout(notify_grid)
 
-        # Area
-        layout.addWidget(self._section_label("弹幕区域"))
+        # Mode selector
+        layout.addWidget(self._section_label("弹幕模式"))
+        mode_group = QButtonGroup(self)
+        mode_layout = QHBoxLayout()
+        mode_layout.setSpacing(4)
+        self.btn_mode_scrolling = self._group_button("滚动", "mode", "scrolling", mode_group)
+        self.btn_mode_floating = self._group_button("浮动", "mode", "floating", mode_group)
+        mode_layout.addWidget(self.btn_mode_scrolling)
+        mode_layout.addWidget(self.btn_mode_floating)
+        layout.addLayout(mode_layout)
+        for btn in (self.btn_mode_scrolling, self.btn_mode_floating):
+            btn.clicked.connect(self._on_mode_changed)
+
+        # Corner selector (only relevant for floating mode, hidden initially)
+        layout.addWidget(self._section_label("浮动弹幕位置"))
+        self.corner_widget = QWidget()
+        corner_layout = QHBoxLayout(self.corner_widget)
+        corner_layout.setContentsMargins(0, 0, 0, 0)
+        corner_layout.setSpacing(4)
+        corner_group = QButtonGroup(self)
+        self.btn_corner_tr = self._group_button("右上", "corner", "topRight", corner_group)
+        self.btn_corner_tl = self._group_button("左上", "corner", "topLeft", corner_group)
+        self.btn_corner_br = self._group_button("右下", "corner", "bottomRight", corner_group)
+        self.btn_corner_bl = self._group_button("左下", "corner", "bottomLeft", corner_group)
+        corner_layout.addWidget(self.btn_corner_tr)
+        corner_layout.addWidget(self.btn_corner_tl)
+        corner_layout.addWidget(self.btn_corner_br)
+        corner_layout.addWidget(self.btn_corner_bl)
+        layout.addWidget(self.corner_widget)
+        for btn in (self.btn_corner_tr, self.btn_corner_tl, self.btn_corner_br, self.btn_corner_bl):
+            btn.clicked.connect(self._emit_config_save)
+
+        # Area (scrolling only)
+        layout.addWidget(self._section_label("滚动区域"))
         self.combo_area = QComboBox()
         self.combo_area.addItems(["全屏", "上半屏", "下半屏"])
         layout.addWidget(self.combo_area)
+        self.area_widget = self.combo_area  # for show/hide
 
         # Sliders
         layout.addWidget(self._section_label("参数调节"))
@@ -757,6 +790,20 @@ class SettingsDialog(QDialog):
         self.btn_theme_dark.setChecked(theme == "dark")
         self.btn_theme_light.setChecked(theme == "light")
 
+        # Mode
+        mode = self.config.display.danmu_mode
+        self.btn_mode_scrolling.setChecked(mode == "scrolling")
+        self.btn_mode_floating.setChecked(mode == "floating")
+        self.corner_widget.setVisible(mode == "floating")
+        self.area_widget.setVisible(mode == "scrolling")
+
+        # Corner
+        corner = self.config.display.floating_corner
+        btn_map = {"topRight": self.btn_corner_tr, "topLeft": self.btn_corner_tl,
+                    "bottomRight": self.btn_corner_br, "bottomLeft": self.btn_corner_bl}
+        btn = btn_map.get(corner, self.btn_corner_tr)
+        btn.setChecked(True)
+
         self.input_hotkey.setText(self.config.hotkey or "f9")
         self.input_boss_key.setText(self.config.boss_key or "f10")
 
@@ -779,6 +826,13 @@ class SettingsDialog(QDialog):
         theme = "dark" if self.btn_theme_dark.isChecked() else "light"
         self.config.theme = theme
         self._apply_theme()
+        self._emit_config_save()
+
+    def _on_mode_changed(self):
+        """Show/hide corner and area widgets based on selected mode."""
+        is_floating = self.btn_mode_floating.isChecked()
+        self.corner_widget.setVisible(is_floating)
+        self.area_widget.setVisible(not is_floating)
         self._emit_config_save()
 
     def _on_save_display(self):
@@ -838,11 +892,24 @@ class SettingsDialog(QDialog):
         area_map = {0: "fullscreen", 1: "topHalf", 2: "bottomHalf"}
         area = area_map.get(self.combo_area.currentIndex(), "fullscreen")
 
+        # Determine mode
+        mode = "floating" if self.btn_mode_floating.isChecked() else "scrolling"
+
+        # Determine floating corner
+        corner = "topRight"
+        if self.btn_corner_tl.isChecked():
+            corner = "topLeft"
+        elif self.btn_corner_br.isChecked():
+            corner = "bottomRight"
+        elif self.btn_corner_bl.isChecked():
+            corner = "bottomLeft"
+
         blocked_ids = [s.strip() for s in self.text_blocked_ids.toPlainText().splitlines() if s.strip()]
         followed_ids = [s.strip() for s in self.text_followed_ids.toPlainText().splitlines() if s.strip()]
 
         display_config = {
-            "danmuMode": "scrolling",
+            "danmuMode": mode,
+            "floatingCorner": corner,
             "showAvatar": self.chk_avatar.isChecked(),
             "showNickname": self.chk_nickname.isChecked(),
             "showImage": self.chk_image.isChecked(),
