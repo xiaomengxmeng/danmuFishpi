@@ -1,61 +1,43 @@
-"""Global hotkey registration using the Win32 RegisterHotKey API.
+"""Global hotkey registration.
 
-Works without admin privileges and integrates with the Qt event loop via
-QAbstractNativeEventFilter.
+Primary implementation uses the `keyboard` library (low-level Windows hook),
+which is more reliable than RegisterHotKey for arbitrary combinations and
+works even when the Qt native event filter misses messages.
+RegisterHotKey is kept as a fallback.
 """
 
 import ctypes
 import logging
+import sys
+import threading
 from ctypes import wintypes
 from typing import Callable, Optional
 
-from PyQt6.QtCore import QObject, pyqtSignal, QAbstractNativeEventFilter
+from PyQt6.QtCore import QObject, pyqtSignal
 
 logger = logging.getLogger("danmuFishpi.hotkey")
 
-user32 = ctypes.windll.user32
-kernel32 = ctypes.windll.kernel32
-
-# Win32 constants
+# Win32 constants for fallback RegisterHotKey
+_user32 = ctypes.windll.user32
+_kernel32 = ctypes.windll.kernel32
 WM_HOTKEY = 0x0312
-
 MOD_ALT = 0x0001
 MOD_CONTROL = 0x0002
 MOD_SHIFT = 0x0004
 MOD_WIN = 0x0008
-
 VK_RETURN = 0x0D
 VK_SPACE = 0x20
 VK_F1 = 0x70
 VK_ESCAPE = 0x1B
 
 
-class NativeHotkeyFilter(QObject, QAbstractNativeEventFilter):
-    """Native event filter that listens for WM_HOTKEY messages."""
-
-    triggered = pyqtSignal()
-
-    def nativeEventFilter(self, event_type, message):
-        et = event_type.toString() if hasattr(event_type, "toString") else str(event_type)
-        # Log native messages that might be hotkey events
-        if et not in ("windows_timer_MSG",):
-            logger.debug(f"nativeEventFilter event_type={et}")
-        if et in ("windows_generic_MSG", "windows_dispatcher_MSG"):
-            try:
-                msg_ptr = ctypes.cast(int(message), ctypes.POINTER(wintypes.MSG))
-                msg = msg_ptr.contents
-            except Exception:
-                return False, 0
-            if msg.message == WM_HOTKEY:
-                logger.info(f"WM_HOTKEY received (id={msg.wParam})")
-                print(f"[danmuFishpi] WM_HOTKEY received id={msg.wParam}", flush=True)
-                self.triggered.emit()
-                return True, 0
-        return False, 0
+def _normalize_hotkey(hotkey_str: str) -> str:
+    """Normalize e.g. 'alt + space' -> 'alt+space'."""
+    return "+".join(p.strip().lower() for p in hotkey_str.split("+") if p.strip())
 
 
 class HotkeyManager(QObject):
-    """Manages a single global hotkey via RegisterHotKey."""
+    """Manages a single global hotkey."""
 
     triggered = pyqtSignal()
 
@@ -63,12 +45,109 @@ class HotkeyManager(QObject):
         super().__init__(parent)
         self._current_hotkey: Optional[str] = None
         self._callback: Optional[Callable] = None
+        self._keyboard_hook = None
         self._hotkey_id: int = 1
-        self._filter = NativeHotkeyFilter()
-        self._filter.triggered.connect(self._on_triggered)
+        self._lock = threading.Lock()
 
-    def _parse_hotkey(self, hotkey_str: str):
-        """Parse 'ctrl+shift+a' into (modifiers, vk)."""
+    def register(self, hotkey_str: str, callback: Callable) -> bool:
+        """Register a global hotkey. Unregisters any previous one first."""
+        self.unregister()
+        normalized = _normalize_hotkey(hotkey_str)
+        if not normalized:
+            logger.error(f"Empty hotkey string")
+            return False
+
+        self._callback = callback
+
+        # Primary: keyboard library low-level hook
+        try:
+            import keyboard
+
+            def _hook_callback():
+                # keyboard calls this from its listener thread; emit signal so
+                # the receiver runs on the Qt main thread.
+                logger.info(f"keyboard hook triggered: {normalized}")
+                print(f"[danmuFishpi] keyboard hook triggered: {normalized}", flush=True)
+                self.triggered.emit()
+
+            self._keyboard_hook = keyboard.add_hotkey(normalized, _hook_callback)
+            self._current_hotkey = normalized
+            logger.info(f"Registered hotkey via keyboard hook: {normalized}")
+            print(f"[danmuFishpi] Registered hotkey (keyboard hook): {normalized}", flush=True)
+            self.triggered.connect(self._on_triggered)
+            return True
+        except Exception as e:
+            logger.warning(f"keyboard hook failed for '{normalized}': {e}; falling back to RegisterHotKey")
+
+        # Fallback: Win32 RegisterHotKey + native event filter
+        return self._register_win32(normalized, callback)
+
+    def _register_win32(self, hotkey_str: str, callback: Callable) -> bool:
+        try:
+            modifiers, vk = self._parse_hotkey_win32(hotkey_str)
+        except Exception as e:
+            logger.error(f"Failed to parse hotkey '{hotkey_str}': {e}")
+            return False
+
+        self._hotkey_id = (_kernel32.GetCurrentProcessId() % 0x7FFF) + 100
+        result = _user32.RegisterHotKey(None, self._hotkey_id, modifiers, vk)
+        if not result:
+            err = _kernel32.GetLastError()
+            logger.error(f"RegisterHotKey failed for '{hotkey_str}' (error {err})")
+            print(f"[danmuFishpi] RegisterHotKey failed for '{hotkey_str}' (error {err})", flush=True)
+            return False
+
+        self._current_hotkey = hotkey_str
+        self._callback = callback
+        logger.info(f"Registered hotkey via RegisterHotKey: {hotkey_str}")
+        print(f"[danmuFishpi] Registered hotkey (RegisterHotKey): {hotkey_str}", flush=True)
+        return True
+
+    def unregister(self) -> None:
+        """Unregister the current hotkey if any."""
+        try:
+            self.triggered.disconnect(self._on_triggered)
+        except Exception:
+            pass
+
+        with self._lock:
+            if self._keyboard_hook is not None:
+                try:
+                    import keyboard
+                    keyboard.remove_hotkey(self._keyboard_hook)
+                except Exception as e:
+                    logger.warning(f"Failed to remove keyboard hook: {e}")
+                self._keyboard_hook = None
+
+            if self._current_hotkey and self._hotkey_id:
+                try:
+                    _user32.UnregisterHotKey(None, self._hotkey_id)
+                except Exception:
+                    pass
+
+            self._current_hotkey = None
+            self._callback = None
+
+    def install_filter(self):
+        """No-op for keyboard-hook primary implementation.
+
+        Kept for API compatibility with previous RegisterHotKey-based code.
+        """
+        pass
+
+    def _on_triggered(self):
+        hk = self._current_hotkey or "未知"
+        logger.info(f"Hotkey triggered, invoking callback ({hk})")
+        print(f"[danmuFishpi] 热键触发: {hk}", flush=True)
+        if self._callback:
+            try:
+                self._callback()
+            except Exception as e:
+                logger.error(f"Hotkey callback error: {e}")
+                print(f"[danmuFishpi] 热键回调错误: {e}", flush=True)
+
+    def _parse_hotkey_win32(self, hotkey_str: str):
+        """Parse 'ctrl+shift+a' into (modifiers, vk) for RegisterHotKey."""
         parts = [p.strip().lower() for p in hotkey_str.split("+") if p.strip()]
         modifiers = 0
         main_key = None
@@ -90,12 +169,10 @@ class HotkeyManager(QObject):
 
     def _key_to_vk(self, key: str) -> int:
         key = key.lower()
-        # Function keys
         if key.startswith("f") and key[1:].isdigit():
             n = int(key[1:])
             if 1 <= n <= 24:
                 return VK_F1 + n - 1
-        # Named keys
         named = {
             "enter": VK_RETURN, "return": VK_RETURN,
             "space": VK_SPACE, " ": VK_SPACE,
@@ -111,61 +188,8 @@ class HotkeyManager(QObject):
         }
         if key in named:
             return named[key]
-        # Letters and digits
         if len(key) == 1:
             code = ord(key.upper())
             if (0x30 <= code <= 0x39) or (0x41 <= code <= 0x5A):
                 return code
         raise ValueError(f"Unsupported hotkey key: '{key}'")
-
-    def register(self, hotkey_str: str, callback: Callable) -> bool:
-        """Register a global hotkey. Unregisters any previous one first."""
-        self.unregister()
-
-        try:
-            modifiers, vk = self._parse_hotkey(hotkey_str)
-        except Exception as e:
-            logger.error(f"Failed to parse hotkey '{hotkey_str}': {e}")
-            return False
-
-        # Use a unique hotkey id based on current process id to avoid collisions
-        self._hotkey_id = (kernel32.GetCurrentProcessId() % 0x7FFF) + 100
-        result = user32.RegisterHotKey(None, self._hotkey_id, modifiers, vk)
-        if not result:
-            err = kernel32.GetLastError()
-            logger.error(f"RegisterHotKey failed for '{hotkey_str}' (error {err})")
-            print(f"[danmuFishpi] RegisterHotKey failed for '{hotkey_str}' (error {err})", flush=True)
-            return False
-
-        self._current_hotkey = hotkey_str
-        self._callback = callback
-        logger.info(f"Registered hotkey: {hotkey_str}")
-        print(f"[danmuFishpi] Registered hotkey: {hotkey_str}", flush=True)
-        return True
-
-    def unregister(self) -> None:
-        """Unregister the current hotkey if any."""
-        if self._current_hotkey:
-            try:
-                user32.UnregisterHotKey(None, self._hotkey_id)
-            except Exception:
-                pass
-            self._current_hotkey = None
-            self._callback = None
-
-    def install_filter(self):
-        """Install the native event filter (call from the Qt main thread)."""
-        from PyQt6.QtWidgets import QApplication
-        app = QApplication.instance()
-        if app:
-            app.installNativeEventFilter(self._filter)
-
-    def _on_triggered(self):
-        logger.info("Hotkey triggered, invoking callback")
-        print(f"[danmuFishpi] 热键触发: {self._current_hotkey}", flush=True)
-        if self._callback:
-            try:
-                self._callback()
-            except Exception as e:
-                logger.error(f"Hotkey callback error: {e}")
-                print(f"[danmuFishpi] 热键回调错误: {e}", flush=True)
