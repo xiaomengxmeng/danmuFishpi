@@ -21,6 +21,7 @@ from PyQt6.QtWidgets import QWidget, QApplication
 from PyQt6.QtCore import QElapsedTimer
 
 from danmu_engine import DanmuEngine, DanmuItem
+from image_cache import ImageCache
 
 logger = logging.getLogger("danmuFishpi.overlay")
 
@@ -112,6 +113,15 @@ class DanmuOverlay(QWidget):
 
         # Pre-rendered pixmaps cache for scrolling items
         self._pixmaps: dict[int, QPixmap] = {}  # id(item) -> QPixmap
+
+        # Async image cache for avatars and inline images
+        self._image_cache = ImageCache(self)
+        self._image_cache.loaded.connect(self._on_image_loaded)
+
+    def _on_image_loaded(self, url: str) -> None:
+        """Invalidate scrolling pixmap cache when any image finishes loading."""
+        self._pixmaps.clear()
+        self.update()
 
     def update_config(self, display_config: dict, theme: str) -> None:
         """Update overlay settings from config."""
@@ -252,27 +262,95 @@ class DanmuOverlay(QWidget):
         return QColor.fromHsv(hue, 180, 220)
 
     def _draw_avatar(self, painter: QPainter, x: float, y: float, size: int,
-                     nickname: str) -> None:
-        """Draw a circular avatar placeholder with the first letter."""
-        color = self._avatar_color(nickname)
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(color)
-        painter.drawEllipse(int(x), int(y), size, size)
+                     nickname: str, avatar_url: str = "") -> None:
+        """Draw a circular avatar. Uses cached image if available, else placeholder."""
+        pm = self._image_cache.get(avatar_url) if avatar_url else None
 
-        letter = nickname[0].upper() if nickname else "?"
-        font = QFont(self.font)
-        font.setPointSize(int(size * 0.5))
-        painter.setFont(font)
-        painter.setPen(QPen(QColor(255, 255, 255)))
-        fm = QFontMetrics(font)
-        tw = fm.horizontalAdvance(letter)
-        th = fm.ascent()
-        painter.drawText(
-            int(x + (size - tw) / 2),
-            int(y + th + (size - th) / 2 - 2),
-            letter,
+        if pm and not pm.isNull():
+            # Clip to circle and draw scaled image
+            path = QPainterPath()
+            path.addEllipse(int(x), int(y), size, size)
+            painter.setClipPath(path)
+            scaled = pm.scaled(
+                size, size,
+                Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+            # Center the scaled image in the circle
+            dx = (size - scaled.width()) // 2
+            dy = (size - scaled.height()) // 2
+            painter.drawPixmap(int(x + dx), int(y + dy), scaled)
+            painter.setClipping(False)
+        else:
+            # Placeholder circle with first letter
+            color = self._avatar_color(nickname)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(color)
+            painter.drawEllipse(int(x), int(y), size, size)
+
+            letter = nickname[0].upper() if nickname else "?"
+            font = QFont(self.font)
+            font.setPointSize(int(size * 0.5))
+            painter.setFont(font)
+            painter.setPen(QPen(QColor(255, 255, 255)))
+            fm = QFontMetrics(font)
+            tw = fm.horizontalAdvance(letter)
+            th = fm.ascent()
+            painter.drawText(
+                int(x + (size - tw) / 2),
+                int(y + th + (size - th) / 2 - 2),
+                letter,
+            )
+            painter.setFont(self.font)
+
+    def _parse_content(self, content: str) -> tuple[str, list[str]]:
+        """Extract plain text and image URLs from message content.
+
+        Returns (text_without_img_tags, list_of_image_src_urls).
+        """
+        import re
+        img_urls = []
+
+        def _collect_img(m):
+            tag = m.group(0)
+            src_match = re.search(r'(?is)src=["\']([^"\']+)["\']', tag)
+            if src_match:
+                url = src_match.group(1)
+                if url:
+                    img_urls.append(url)
+            return ""
+
+        text = re.sub(r"(?is)<img[^>]*>", _collect_img, content)
+        text = re.sub(r'<[^>]+>', '', text).strip()
+        return text, img_urls
+
+    def _draw_inline_image(self, painter: QPainter, x: float, y: float,
+                           url: str, max_size: int) -> tuple[int, int]:
+        """Draw a scaled inline image. Returns actual (width, height)."""
+        pm = self._image_cache.get(url)
+        if not pm or pm.isNull():
+            # Placeholder while loading
+            painter.setPen(QPen(self.theme["card_border"]))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRoundedRect(int(x), int(y), max_size, max_size, 6, 6)
+            painter.setPen(QPen(self.theme["text"]))
+            painter.drawText(int(x + 8), int(y + max_size // 2), "[图片]")
+            return max_size, max_size
+
+        src_w, src_h = pm.width(), pm.height()
+        if src_w <= 0 or src_h <= 0:
+            return 0, 0
+
+        scale = min(max_size / src_w, max_size / src_h, 1.0)
+        dst_w = int(src_w * scale)
+        dst_h = int(src_h * scale)
+        scaled = pm.scaled(
+            dst_w, dst_h,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
         )
-        painter.setFont(self.font)
+        painter.drawPixmap(int(x), int(y), scaled)
+        return dst_w, dst_h
 
     def _get_item_pixmap(self, item: DanmuItem) -> QPixmap:
         """Get or create a pre-rendered pixmap for a scrolling item."""
@@ -280,13 +358,21 @@ class DanmuOverlay(QWidget):
         if item_id in self._pixmaps:
             return self._pixmaps[item_id]
 
-        # Max width is 60% of container width
         max_width = int(self.engine.container_width * 0.6)
         avatar_size = int(self.engine.font_size * 1.4)
         padding = 12
         line_gap = 4
+        image_max_h = 80
+        image_gap = 6
 
-        # Prepare prefix size
+        # Parse text and images
+        text, img_urls = self._parse_content(item.content)
+        show_images = self.engine.show_image and item.has_image and img_urls
+
+        if item.has_image and not self.engine.show_image:
+            text = "[图片] " + text
+
+        # Prefix size (avatar + nickname)
         prefix_w = 0
         if self.engine.show_avatar and item.nickname:
             prefix_w += avatar_size + 8
@@ -295,31 +381,50 @@ class DanmuOverlay(QWidget):
             nick_text = item.nickname + ": "
             prefix_w += self.font_metrics.horizontalAdvance(nick_text) + 8
 
-        # Content width
-        content = self._strip_html(item.content)
-        if item.has_image and not self.engine.show_image:
-            content = "[图片] " + content
-
-        # Decide layout: if total width fits, single line; otherwise wrap content
-        content_single_w = self.font_metrics.horizontalAdvance(content)
+        # Text layout
+        content_single_w = self.font_metrics.horizontalAdvance(text)
         total_single_w = prefix_w + content_single_w + padding * 2
 
         if total_single_w <= max_width:
-            # Single line
             width = max(1, total_single_w)
-            height = int(self.font_metrics.height() + 10)
+            text_height = int(self.font_metrics.height() + 10)
             lines = 1
         else:
-            # Wrap content into multiple lines (max 2 lines for scrolling)
             available_w = max(100, max_width - prefix_w - padding * 2)
             flags = int(Qt.TextFlag.TextWordWrap)
             br = self.font_metrics.boundingRect(
-                QRect(0, 0, available_w, 1000), flags, content)
+                QRect(0, 0, available_w, 1000), flags, text)
             line_h = self.font_metrics.height()
-            max_h = line_h * 2 + line_gap  # limit to 2 lines visually
             lines = max(1, min(2, (br.height() + line_h - 1) // line_h))
             width = max_width
-            height = int(line_h * lines + line_gap * (lines - 1) + 10)
+            text_height = int(line_h * lines + line_gap * (lines - 1) + 10)
+
+        # Image block (placed below text)
+        image_block_h = 0
+        image_block_w = 0
+        if show_images:
+            row_x = 0
+            row_h = 0
+            for url in img_urls[:3]:  # up to 3 images
+                pm = self._image_cache.get(url)
+                if pm and not pm.isNull():
+                    scale = min(image_max_h / pm.height(), image_max_h / pm.width(), 1.0)
+                    dw = int(pm.width() * scale)
+                    dh = int(pm.height() * scale)
+                else:
+                    dw = dh = image_max_h
+                if row_x + dw > width - padding * 2 and row_x > 0:
+                    image_block_h += row_h + image_gap
+                    row_x = 0
+                    row_h = 0
+                row_x += dw + image_gap
+                row_h = max(row_h, dh)
+                image_block_w = max(image_block_w, row_x)
+            image_block_h += row_h
+            if image_block_h > 0:
+                image_block_h += padding  # gap between text and images
+
+        height = text_height + image_block_h
 
         if width <= 0 or height <= 0:
             return QPixmap()
@@ -339,7 +444,7 @@ class DanmuOverlay(QWidget):
 
         # Draw avatar
         if self.engine.show_avatar and item.nickname:
-            self._draw_avatar(p, text_x, 5, avatar_size, item.nickname)
+            self._draw_avatar(p, text_x, 5, avatar_size, item.nickname, item.avatar_url)
             text_x += avatar_size + 8
 
         # Draw nickname
@@ -350,16 +455,36 @@ class DanmuOverlay(QWidget):
 
         # Draw content (single line or wrapped)
         if lines == 1:
-            self._draw_text_with_outline(p, content, text_x, text_y,
+            self._draw_text_with_outline(p, text, text_x, text_y,
                                          self.theme["text"])
         else:
             available_w = max(100, width - text_x - padding)
-            content_rect = QRect(text_x, 5, available_w, height - 10)
-            self._draw_text_wrapped(p, content, content_rect)
+            content_rect = QRect(text_x, 5, available_w, text_height - 10)
+            self._draw_text_wrapped(p, text, content_rect)
+
+        # Draw images below text
+        if show_images:
+            img_x = padding
+            img_y = text_height
+            row_h = 0
+            for url in img_urls[:3]:
+                pm = self._image_cache.get(url)
+                if pm and not pm.isNull():
+                    scale = min(image_max_h / pm.height(), image_max_h / pm.width(), 1.0)
+                    dw = int(pm.width() * scale)
+                    dh = int(pm.height() * scale)
+                else:
+                    dw = dh = image_max_h
+                if img_x + dw > width - padding and img_x > padding:
+                    img_x = padding
+                    img_y += row_h + image_gap
+                    row_h = 0
+                self._draw_inline_image(p, img_x, img_y, url, image_max_h)
+                img_x += dw + image_gap
+                row_h = max(row_h, dh)
 
         p.end()
 
-        # Set item dimensions
         item.width = width
         item.height = height
         self._pixmaps[item_id] = pm
@@ -456,6 +581,8 @@ class DanmuOverlay(QWidget):
         avatar_size = 28
         gap = 8
         line_gap = 2
+        image_max_h = 80
+        image_gap = 6
 
         # Prepare fonts
         nick_font = QFont(self.font)
@@ -466,19 +593,45 @@ class DanmuOverlay(QWidget):
         content_font.setPointSize(max(9, self.engine.font_size - 4))
         content_fm = QFontMetrics(content_font)
 
-        content = self._strip_html(item.content)
+        text, img_urls = self._parse_content(item.content)
+        show_images = self.engine.show_image and item.has_image and img_urls
         if item.has_image and not self.engine.show_image:
-            content = "[图片] " + content
+            text = "[图片] " + text
 
         # Measure content inside card with word wrap
         text_w = w - padding * 2 - (avatar_size + gap if self.engine.show_avatar else 0)
         text_w = max(40, text_w)
         flags = int(Qt.TextFlag.TextWordWrap)
-        content_br = content_fm.boundingRect(QRect(0, 0, int(text_w), 1000), flags, content)
+        content_br = content_fm.boundingRect(QRect(0, 0, int(text_w), 1000), flags, text)
         content_h = content_br.height()
 
         nick_h = nick_fm.height() if self.engine.show_nickname and item.nickname else 0
         total_h = padding * 2 + nick_h + (line_gap if nick_h else 0) + content_h
+
+        # Add image block height
+        image_block_h = 0
+        if show_images:
+            row_x = 0
+            row_h = 0
+            for url in img_urls[:3]:
+                pm = self._image_cache.get(url)
+                if pm and not pm.isNull():
+                    scale = min(image_max_h / pm.height(), image_max_h / pm.width(), 1.0)
+                    dw = int(pm.width() * scale)
+                    dh = int(pm.height() * scale)
+                else:
+                    dw = dh = image_max_h
+                if row_x + dw > text_w and row_x > 0:
+                    image_block_h += row_h + image_gap
+                    row_x = 0
+                    row_h = 0
+                row_x += dw + image_gap
+                row_h = max(row_h, dh)
+            image_block_h += row_h
+            if image_block_h > 0:
+                image_block_h += padding
+            total_h += image_block_h
+
         total_h = max(total_h, avatar_size + padding * 2)
 
         # Draw card background/border
@@ -490,7 +643,7 @@ class DanmuOverlay(QWidget):
         text_x = x + padding
         if self.engine.show_avatar and item.nickname:
             self._draw_avatar(painter, text_x, y + padding + (total_h - padding * 2 - avatar_size) / 2,
-                              avatar_size, item.nickname)
+                              avatar_size, item.nickname, item.avatar_url)
             text_x += avatar_size + gap
 
         # Draw nickname
@@ -504,8 +657,29 @@ class DanmuOverlay(QWidget):
         text_y += nick_h + line_gap
         painter.setPen(QPen(self.theme["text"]))
         painter.setFont(content_font)
-        content_rect = QRect(int(text_x), int(text_y), int(text_w), int(total_h - text_y - padding))
-        painter.drawText(content_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop | Qt.TextFlag.TextWordWrap, content)
+        content_rect = QRect(int(text_x), int(text_y), int(text_w), int(content_h))
+        painter.drawText(content_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop | Qt.TextFlag.TextWordWrap, text)
+
+        # Draw images below text
+        if show_images:
+            img_x = text_x
+            img_y = text_y + content_h + padding
+            row_h = 0
+            for url in img_urls[:3]:
+                pm = self._image_cache.get(url)
+                if pm and not pm.isNull():
+                    scale = min(image_max_h / pm.height(), image_max_h / pm.width(), 1.0)
+                    dw = int(pm.width() * scale)
+                    dh = int(pm.height() * scale)
+                else:
+                    dw = dh = image_max_h
+                if img_x + dw > text_x + text_w and img_x > text_x:
+                    img_x = text_x
+                    img_y += row_h + image_gap
+                    row_h = 0
+                self._draw_inline_image(painter, img_x, img_y, url, image_max_h)
+                img_x += dw + image_gap
+                row_h = max(row_h, dh)
 
         painter.setFont(self.font)
         return total_h
@@ -516,6 +690,8 @@ class DanmuOverlay(QWidget):
         padding = 10
         avatar_size = 24
         gap = 8
+        image_max_h = 80
+        image_gap = 6
 
         nick_font = QFont(self.font)
         nick_font.setPointSize(max(8, self.engine.font_size - 6))
@@ -525,18 +701,44 @@ class DanmuOverlay(QWidget):
         content_font.setPointSize(max(9, self.engine.font_size - 4))
         content_fm = QFontMetrics(content_font)
 
-        content = self._strip_html(item.content)
+        text, img_urls = self._parse_content(item.content)
+        show_images = self.engine.show_image and item.has_image and img_urls
         if item.has_image and not self.engine.show_image:
-            content = "[图片] " + content
+            text = "[图片] " + text
 
         text_w = w - padding * 2 - (avatar_size + gap if self.engine.show_avatar else 0)
         text_w = max(40, text_w)
         flags = int(Qt.TextFlag.TextWordWrap)
-        content_br = content_fm.boundingRect(QRect(0, 0, int(text_w), 1000), flags, content)
+        content_br = content_fm.boundingRect(QRect(0, 0, int(text_w), 1000), flags, text)
         content_h = content_br.height()
 
         nick_h = nick_fm.height() if self.engine.show_nickname and item.nickname else 0
         total_h = padding * 2 + nick_h + 2 + content_h
+
+        # Add image block height
+        image_block_h = 0
+        if show_images:
+            row_x = 0
+            row_h = 0
+            for url in img_urls[:3]:
+                pm = self._image_cache.get(url)
+                if pm and not pm.isNull():
+                    scale = min(image_max_h / pm.height(), image_max_h / pm.width(), 1.0)
+                    dw = int(pm.width() * scale)
+                    dh = int(pm.height() * scale)
+                else:
+                    dw = dh = image_max_h
+                if row_x + dw > text_w and row_x > 0:
+                    image_block_h += row_h + image_gap
+                    row_x = 0
+                    row_h = 0
+                row_x += dw + image_gap
+                row_h = max(row_h, dh)
+            image_block_h += row_h
+            if image_block_h > 0:
+                image_block_h += padding
+            total_h += image_block_h
+
         total_h = max(total_h, avatar_size + padding * 2)
 
         painter.setPen(QPen(self.theme["card_border"]))
@@ -546,7 +748,7 @@ class DanmuOverlay(QWidget):
         text_x = x + padding
         if self.engine.show_avatar and item.nickname:
             self._draw_avatar(painter, text_x, y + padding + (total_h - padding * 2 - avatar_size) / 2,
-                              avatar_size, item.nickname)
+                              avatar_size, item.nickname, item.avatar_url)
             text_x += avatar_size + gap
 
         text_y = y + padding + nick_fm.ascent()
@@ -558,8 +760,29 @@ class DanmuOverlay(QWidget):
         text_y += nick_h + 2
         painter.setPen(QPen(self.theme["text"]))
         painter.setFont(content_font)
-        content_rect = QRect(int(text_x), int(text_y), int(text_w), int(total_h - text_y - padding))
-        painter.drawText(content_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop | Qt.TextFlag.TextWordWrap, content)
+        content_rect = QRect(int(text_x), int(text_y), int(text_w), int(content_h))
+        painter.drawText(content_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop | Qt.TextFlag.TextWordWrap, text)
+
+        # Draw images below text
+        if show_images:
+            img_x = text_x
+            img_y = text_y + content_h + padding
+            row_h = 0
+            for url in img_urls[:3]:
+                pm = self._image_cache.get(url)
+                if pm and not pm.isNull():
+                    scale = min(image_max_h / pm.height(), image_max_h / pm.width(), 1.0)
+                    dw = int(pm.width() * scale)
+                    dh = int(pm.height() * scale)
+                else:
+                    dw = dh = image_max_h
+                if img_x + dw > text_x + text_w and img_x > text_x:
+                    img_x = text_x
+                    img_y += row_h + image_gap
+                    row_h = 0
+                self._draw_inline_image(painter, img_x, img_y, url, image_max_h)
+                img_x += dw + image_gap
+                row_h = max(row_h, dh)
 
         painter.setFont(self.font)
         return total_h
