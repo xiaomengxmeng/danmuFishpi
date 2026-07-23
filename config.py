@@ -79,8 +79,12 @@ class Display:
     show_red_packet: bool = True
     blocked_user_ids: list[str] = field(default_factory=list)
     followed_user_ids: list[str] = field(default_factory=list)
-    play_sound: bool = False           # notification sound for special follows
+    play_sound: bool = False           # deprecated, kept for compatibility
     show_outline: bool = True          # text outline on danmu
+    top_margin: int = 0                # 0-300 px
+    notify_startup: bool = True
+    notify_login: bool = True
+    notify_follow: bool = True
     danmu_speed: int = 5               # 1-10
     danmu_area: str = "fullscreen"     # fullscreen | topHalf | bottomHalf
     danmu_width: int = 100             # 30-100 percentage
@@ -94,7 +98,7 @@ class Display:
 class Config:
     account: Account = field(default_factory=Account)
     display: Display = field(default_factory=Display)
-    hotkey: str = "ctrl+shift+enter"
+    hotkey: str = "alt+space"
     theme: str = "dark"                # dark | light
 
 
@@ -125,6 +129,10 @@ def config_to_dict(cfg: Config) -> dict:
         "followedUserIds": disp["followed_user_ids"],
         "playSound": disp["play_sound"],
         "showOutline": disp["show_outline"],
+        "topMargin": disp["top_margin"],
+        "notifyStartup": disp["notify_startup"],
+        "notifyLogin": disp["notify_login"],
+        "notifyFollow": disp["notify_follow"],
         "danmuSpeed": disp["danmu_speed"],
         "danmuArea": disp["danmu_area"],
         "danmuWidth": disp["danmu_width"],
@@ -155,6 +163,10 @@ def config_from_dict(d: dict) -> Config:
         followed_user_ids=disp.get("followedUserIds", []),
         play_sound=disp.get("playSound", False),
         show_outline=disp.get("showOutline", True),
+        top_margin=disp.get("topMargin", 0),
+        notify_startup=disp.get("notifyStartup", True),
+        notify_login=disp.get("notifyLogin", True),
+        notify_follow=disp.get("notifyFollow", True),
         danmu_speed=disp.get("danmuSpeed", 5),
         danmu_area=disp.get("danmuArea", "fullscreen"),
         danmu_width=disp.get("danmuWidth", 100),
@@ -163,7 +175,7 @@ def config_from_dict(d: dict) -> Config:
         font_size=disp.get("fontSize", 24),
         font_family=disp.get("fontFamily", "Microsoft YaHei"),
     )
-    cfg.hotkey = d.get("hotkey", "ctrl+shift+enter")
+    cfg.hotkey = d.get("hotkey", "alt+space")
     cfg.theme = d.get("theme", "dark")
     return cfg
 

@@ -18,7 +18,7 @@ from config import Config, dpapi_encrypt, dpapi_decrypt
 
 logger = logging.getLogger("danmuFishpi.settings")
 
-APP_NAME = "Py小梦的科技"
+APP_NAME = "弹幕鱼排"
 APP_VERSION = "1.0.0"
 
 
@@ -430,15 +430,25 @@ class SettingsDialog(QDialog):
         self.chk_nickname = QCheckBox("昵称")
         self.chk_image = QCheckBox("图片")
         self.chk_red_packet = QCheckBox("红包")
-        self.chk_sound = QCheckBox("提示声")
         self.chk_outline = QCheckBox("文字描边")
         options_layout.addWidget(self.chk_avatar)
         options_layout.addWidget(self.chk_nickname)
         options_layout.addWidget(self.chk_image)
         options_layout.addWidget(self.chk_red_packet)
-        options_layout.addWidget(self.chk_sound)
         options_layout.addWidget(self.chk_outline)
         layout.addLayout(options_layout)
+
+        # Notification switches
+        layout.addWidget(self._section_label("通知"))
+        notify_layout = QHBoxLayout()
+        notify_layout.setSpacing(4)
+        self.chk_notify_startup = QCheckBox("启动提示")
+        self.chk_notify_login = QCheckBox("登录提示")
+        self.chk_notify_follow = QCheckBox("特别关注提示")
+        notify_layout.addWidget(self.chk_notify_startup)
+        notify_layout.addWidget(self.chk_notify_login)
+        notify_layout.addWidget(self.chk_notify_follow)
+        layout.addLayout(notify_layout)
 
         # Area
         layout.addWidget(self._section_label("弹幕区域"))
@@ -462,6 +472,9 @@ class SettingsDialog(QDialog):
 
         self.slider_font = self._make_slider(12, 48, self.config.display.font_size)
         layout.addLayout(self._slider_row("字号", self.slider_font, self.config.display.font_size, "px"))
+
+        self.slider_top_margin = self._make_slider(0, 300, self.config.display.top_margin)
+        layout.addLayout(self._slider_row("顶部边距", self.slider_top_margin, self.config.display.top_margin, "px"))
 
         layout.addWidget(self._section_label("字体"))
         self.combo_font = QComboBox()
@@ -498,8 +511,10 @@ class SettingsDialog(QDialog):
         self.chk_nickname.stateChanged.connect(self._emit_config_save)
         self.chk_image.stateChanged.connect(self._emit_config_save)
         self.chk_red_packet.stateChanged.connect(self._emit_config_save)
-        self.chk_sound.stateChanged.connect(self._emit_config_save)
         self.chk_outline.stateChanged.connect(self._emit_config_save)
+        self.chk_notify_startup.stateChanged.connect(self._emit_config_save)
+        self.chk_notify_login.stateChanged.connect(self._emit_config_save)
+        self.chk_notify_follow.stateChanged.connect(self._emit_config_save)
         self.combo_area.currentIndexChanged.connect(self._emit_config_save)
         self.combo_font.currentTextChanged.connect(self._emit_config_save)
         self.slider_speed.valueChanged.connect(self._emit_config_save)
@@ -507,6 +522,7 @@ class SettingsDialog(QDialog):
         self.slider_height.valueChanged.connect(self._emit_config_save)
         self.slider_opacity.valueChanged.connect(self._emit_config_save)
         self.slider_font.valueChanged.connect(self._emit_config_save)
+        self.slider_top_margin.valueChanged.connect(self._emit_config_save)
 
         layout.addStretch()
 
@@ -519,7 +535,7 @@ class SettingsDialog(QDialog):
         layout.addWidget(self._section_label("全局快捷键"))
         layout.addWidget(self._field_label("打开输入框快捷键"))
         self.input_hotkey = QLineEdit()
-        self.input_hotkey.setPlaceholderText("例如: ctrl+shift+enter")
+        self.input_hotkey.setPlaceholderText("例如: alt+space")
         layout.addWidget(self.input_hotkey)
 
         hint = QLabel("按下快捷键可在任何位置打开消息输入框。如果设置后无效，说明该组合键已被其他程序占用，请换一个。输入文字后按 Enter 发送，按 Esc 关闭。")
@@ -592,8 +608,10 @@ class SettingsDialog(QDialog):
         self.chk_nickname.setChecked(self.config.display.show_nickname)
         self.chk_image.setChecked(self.config.display.show_image)
         self.chk_red_packet.setChecked(self.config.display.show_red_packet)
-        self.chk_sound.setChecked(self.config.display.play_sound)
         self.chk_outline.setChecked(self.config.display.show_outline)
+        self.chk_notify_startup.setChecked(self.config.display.notify_startup)
+        self.chk_notify_login.setChecked(self.config.display.notify_login)
+        self.chk_notify_follow.setChecked(self.config.display.notify_follow)
 
         self.slider_speed.setValue(self.config.display.danmu_speed)
         area_map = {"fullscreen": 0, "topHalf": 1, "bottomHalf": 2}
@@ -604,6 +622,7 @@ class SettingsDialog(QDialog):
         self.slider_height.setValue(self.config.display.danmu_height)
         self.slider_opacity.setValue(self.config.display.danmu_opacity)
         self.slider_font.setValue(self.config.display.font_size)
+        self.slider_top_margin.setValue(self.config.display.top_margin)
 
         idx = self.combo_font.findText(self.config.display.font_family)
         if idx >= 0:
@@ -618,7 +637,7 @@ class SettingsDialog(QDialog):
         self.btn_theme_dark.setChecked(theme == "dark")
         self.btn_theme_light.setChecked(theme == "light")
 
-        self.input_hotkey.setText(self.config.hotkey or "ctrl+enter")
+        self.input_hotkey.setText(self.config.hotkey or "alt+space")
 
     # ── Event Handlers ──────────────────────────────────────────
 
@@ -706,8 +725,11 @@ class SettingsDialog(QDialog):
             "showNickname": self.chk_nickname.isChecked(),
             "showImage": self.chk_image.isChecked(),
             "showRedPacket": self.chk_red_packet.isChecked(),
-            "playSound": self.chk_sound.isChecked(),
             "showOutline": self.chk_outline.isChecked(),
+            "topMargin": self.slider_top_margin.value(),
+            "notifyStartup": self.chk_notify_startup.isChecked(),
+            "notifyLogin": self.chk_notify_login.isChecked(),
+            "notifyFollow": self.chk_notify_follow.isChecked(),
             "blockedUserIds": blocked_ids,
             "followedUserIds": followed_ids,
             "danmuSpeed": self.slider_speed.value(),

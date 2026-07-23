@@ -22,6 +22,7 @@ from tray import Tray
 from hotkey import HotkeyManager
 from settings_window import SettingsDialog
 from input_box import InputBox
+from notification import NotificationManager
 
 logging.basicConfig(
     level=logging.INFO,
@@ -78,6 +79,7 @@ class App:
             "showImage": self.config.display.show_image,
             "showRedPacket": self.config.display.show_red_packet,
             "showOutline": self.config.display.show_outline,
+            "topMargin": self.config.display.top_margin,
             "danmuSpeed": self.config.display.danmu_speed,
             "danmuArea": self.config.display.danmu_area,
             "danmuWidth": self.config.display.danmu_width,
@@ -99,6 +101,9 @@ class App:
         self.bridge.login_result.connect(self._on_login_result)
         self.bridge.chatroom_error.connect(self._on_chatroom_error)
 
+        # Create notification manager (silent, no Windows sound)
+        self.notification_manager = NotificationManager(theme=self.config.theme)
+
         # Create system tray
         self.tray = Tray(self.app, self._create_icon(), {
             "on_show_settings": self.show_settings,
@@ -118,7 +123,11 @@ class App:
         self._register_hotkey_with_fallback()
         active_hotkey = self.hotkey_mgr._current_hotkey or "未注册"
         logger.info(f"Current global hotkey: {active_hotkey}")
-        self.tray.show_message("热键已就绪", f"按 {active_hotkey} 打开输入框\n也可右键托盘 → 发送消息")
+        if self.config.display.notify_startup:
+            self.notification_manager.show(
+                "热键已就绪",
+                f"按 {active_hotkey} 打开输入框\n也可右键托盘 → 发送消息",
+            )
 
         # Settings dialog (created lazily)
         self.settings_dialog = None
@@ -175,8 +184,8 @@ class App:
         # Special follow notification
         if user_id and user_id in self.config.display.followed_user_ids:
             logger.info(f"Special follow message from {nickname}: {content}")
-            if self.config.display.play_sound:
-                self.tray.show_message(
+            if self.config.display.notify_follow:
+                self.notification_manager.show(
                     "特别关注",
                     f"{msg.get('nickname', user_id)}: {msg.get('content', '')[:60]}",
                 )
@@ -191,7 +200,8 @@ class App:
             self.start_chatroom(api_key)
             if self.settings_dialog:
                 self.settings_dialog.on_login_success(self.config.account.username)
-            self.tray.show_message("弹幕鱼排", "登录成功，聊天室已连接")
+            if self.config.display.notify_login:
+                self.notification_manager.show("弹幕鱼排", "登录成功，聊天室已连接")
         else:
             if self.settings_dialog:
                 self.settings_dialog.on_login_failed(error or "未知错误")
@@ -235,7 +245,8 @@ class App:
         cfg_module.save(self.config, self.config_path)
         if self.settings_dialog:
             self.settings_dialog.on_logout()
-        self.tray.show_message("弹幕鱼排", "已退出登录")
+        if self.config.display.notify_login:
+            self.notification_manager.show("弹幕鱼排", "已退出登录")
 
     def auto_login(self) -> None:
         """Attempt auto-login with saved credentials."""
@@ -310,8 +321,8 @@ class App:
 
     def _register_hotkey_with_fallback(self) -> None:
         """Register the configured global hotkey, trying fallbacks if taken."""
-        configured = (self.config.hotkey or "ctrl+shift+enter").strip()
-        fallbacks = ["ctrl+shift+enter", "ctrl+alt+enter", "ctrl+shift+m", "ctrl+alt+shift+enter"]
+        configured = (self.config.hotkey or "alt+space").strip()
+        fallbacks = ["alt+space", "ctrl+shift+enter", "ctrl+alt+enter", "ctrl+shift+m", "ctrl+alt+shift+enter"]
 
         # Build ordered list of candidates without duplicates
         candidates = []
@@ -322,7 +333,7 @@ class App:
         def _hotkey_wrapper():
             hk = self.hotkey_mgr._current_hotkey or "未知"
             print(f"[danmuFishpi] 全局热键 {hk} 触发", flush=True)
-            self.tray.show_message("热键触发", f"{hk} 已触发，正在打开输入框")
+            self.notification_manager.show("热键触发", f"{hk} 已触发，正在打开输入框")
             self.show_input_box()
 
         for hotkey in candidates:
@@ -330,14 +341,16 @@ class App:
                 if hotkey != configured:
                     self.config.hotkey = hotkey
                     cfg_module.save(self.config, self.config_path)
-                    self.tray.show_message(
-                        "Py小梦的科技",
+                    self.notification_manager.show(
+                        "弹幕鱼排",
                         f"快捷键 '{configured}' 被占用，已自动切换为 '{hotkey}'。",
                     )
                 return
 
-        self.tray.show_message(
-            "Py小梦的科技",
+        from PyQt6.QtWidgets import QMessageBox
+        QMessageBox.warning(
+            None,
+            "弹幕鱼排",
             f"所有候选快捷键（{', '.join(candidates)}）均注册失败，\n"
             "可能已有其他程序占用了这些组合键。请在设置中手动更换。",
         )
@@ -381,6 +394,10 @@ class App:
         self.config.display.show_red_packet = display_config.get("showRedPacket", self.config.display.show_red_packet)
         self.config.display.play_sound = display_config.get("playSound", self.config.display.play_sound)
         self.config.display.show_outline = display_config.get("showOutline", self.config.display.show_outline)
+        self.config.display.top_margin = display_config.get("topMargin", self.config.display.top_margin)
+        self.config.display.notify_startup = display_config.get("notifyStartup", self.config.display.notify_startup)
+        self.config.display.notify_login = display_config.get("notifyLogin", self.config.display.notify_login)
+        self.config.display.notify_follow = display_config.get("notifyFollow", self.config.display.notify_follow)
         self.config.display.blocked_user_ids = display_config.get("blockedUserIds", self.config.display.blocked_user_ids)
         self.config.display.followed_user_ids = display_config.get("followedUserIds", self.config.display.followed_user_ids)
         self.config.display.danmu_speed = display_config.get("danmuSpeed", self.config.display.danmu_speed)
@@ -422,6 +439,7 @@ class App:
             "showImage": self.config.display.show_image,
             "showRedPacket": self.config.display.show_red_packet,
             "showOutline": self.config.display.show_outline,
+            "topMargin": self.config.display.top_margin,
             "danmuSpeed": self.config.display.danmu_speed,
             "danmuArea": self.config.display.danmu_area,
             "danmuWidth": self.config.display.danmu_width,
@@ -430,6 +448,7 @@ class App:
             "fontSize": self.config.display.font_size,
             "fontFamily": self.config.display.font_family,
         }, theme)
+        self.notification_manager.set_theme(theme)
         self.tray.set_theme_checked(theme)
         if self.settings_dialog:
             self.settings_dialog.update_config(self.config)

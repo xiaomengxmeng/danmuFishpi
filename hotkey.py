@@ -134,11 +134,13 @@ class HotkeyManager(QObject):
         if not result:
             err = kernel32.GetLastError()
             logger.error(f"RegisterHotKey failed for '{hotkey_str}' (error {err})")
+            print(f"[danmuFishpi] RegisterHotKey failed for '{hotkey_str}' (error {err})", flush=True)
             return False
 
         self._current_hotkey = hotkey_str
         self._callback = callback
         logger.info(f"Registered hotkey: {hotkey_str}")
+        print(f"[danmuFishpi] Registered hotkey: {hotkey_str}", flush=True)
         return True
 
     def unregister(self) -> None:

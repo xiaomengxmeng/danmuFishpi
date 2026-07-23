@@ -30,7 +30,7 @@ class Tray:
         """
         self.callbacks = callbacks
         self.tray = QSystemTrayIcon(icon, app)
-        self.tray.setToolTip("Py小梦的科技")
+        self.tray.setToolTip("弹幕鱼排")
         self.visible = True
 
         self._build_menu()

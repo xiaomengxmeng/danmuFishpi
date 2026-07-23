@@ -61,6 +61,7 @@ class DanmuEngine:
         self.show_nickname: bool = True
         self.show_image: bool = True
         self.opacity: int = 100
+        self.top_margin: int = 0
 
         self.tracks: list[Track] = []
         self.scroll_items: list[DanmuItem] = []   # Active scrolling items
@@ -83,6 +84,7 @@ class DanmuEngine:
         self.show_nickname = display_config.get("showNickname", self.show_nickname)
         self.show_image = display_config.get("showImage", self.show_image)
         self.opacity = display_config.get("danmuOpacity", self.opacity)
+        self.top_margin = display_config.get("topMargin", self.top_margin)
         self.init_tracks()
 
     def set_container_size(self, w: float, h: float) -> None:
@@ -94,14 +96,14 @@ class DanmuEngine:
         """Initialize scrolling tracks based on font size and area."""
         line_height = self.font_size * 1.6
         available_height = self.container_height
-        start_offset = 0.0
+        start_offset = float(self.top_margin)
 
         if self.danmu_area == "topHalf":
             available_height = self.container_height / 2
-            start_offset = 0.0
+            start_offset = float(self.top_margin)
         elif self.danmu_area == "bottomHalf":
             available_height = self.container_height / 2
-            start_offset = self.container_height / 2
+            start_offset = self.container_height / 2 + float(self.top_margin)
 
         track_count = max(5, min(int(available_height / line_height), 20))
 
