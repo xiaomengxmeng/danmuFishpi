@@ -7,3 +7,4 @@ dist/
 build/
 .env
 config.json
+*.spec
