@@ -15,7 +15,7 @@ import time
 
 from PyQt6.QtCore import Qt, QTimer, QRect, QRectF, QPointF, QElapsedTimer
 from PyQt6.QtGui import (
-    QColor, QFont, QFontMetrics, QPainter, QPainterPath, QPen, QPixmap,
+    QColor, QFont, QFontMetrics, QPainter, QPainterPath, QPen, QPixmap, QBrush,
 )
 from PyQt6.QtWidgets import QWidget, QApplication
 
@@ -517,9 +517,10 @@ class DanmuOverlay(QWidget):
 
     def _draw_inline_image(self, painter: QPainter, x: float, y: float,
                            url: str, max_size: int) -> tuple[int, int]:
-        """Draw a scaled inline image. Returns actual (width, height).
+        """Draw a scaled inline image with rounded corners (web-style).
 
-        For animated GIFs the current frame is drawn (loops forever).
+        Uses a clip path for rounded corners. Adds a subtle border to match
+        typical web image style. Animated GIFs advance every frame.
         """
         pm = None
         if self._image_cache.is_animated(url) and self._anim_clock_started:
@@ -540,15 +541,29 @@ class DanmuOverlay(QWidget):
         if src_w <= 0 or src_h <= 0:
             return 0, 0
 
-        scale = min(max_size / src_w, max_size / src_h, 1.0)
-        dst_w = int(src_w * scale)
-        dst_h = int(src_h * scale)
+        # Scale to fit within max_size, with a small margin so images don't
+        # feel cramped against borders (like web lightbox behaviour).
+        scale = min(max_size / src_w, max_size / src_h, 0.95)
+        dst_w = max(1, int(src_w * scale))
+        dst_h = max(1, int(src_h * scale))
+
         scaled = pm.scaled(
             dst_w, dst_h,
             Qt.AspectRatioMode.KeepAspectRatio,
             Qt.TransformationMode.SmoothTransformation,
         )
+
+        # Clip to rounded rect for web-style corners
+        clip_path = QPainterPath()
+        clip_path.addRoundedRect(QRectF(x, y, dst_w, dst_h), 6, 6)
+        painter.setClipPath(clip_path)
         painter.drawPixmap(int(x), int(y), scaled)
+        painter.setClipping(False)
+
+        # Subtle border overlay (matches typical web image border)
+        painter.setPen(QPen(QColor(255, 255, 255, 20), 1))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawRoundedRect(QRectF(x, y, dst_w, dst_h), 6, 6)
         return dst_w, dst_h
 
     def _get_item_pixmap(self, item: DanmuItem) -> QPixmap:
@@ -593,10 +608,17 @@ class DanmuOverlay(QWidget):
             nick_text = item.nickname + ": "
             prefix_w += self.font_metrics.horizontalAdvance(nick_text) + 8
 
-        # Text layout with preserved line breaks — no line limit for scrolling mode,
-        # so long messages auto-wrap across as many lines as needed.
+        # Text layout — truncate if setting enabled
+        max_lines = None
+        if self.engine.truncate_long_messages:
+            max_lines = self.engine.max_message_lines
         available_text_w = max(100, max_width - prefix_w - padding * 2)
-        text_lines = self._wrap_text(text, self.font_metrics, available_text_w)
+        text_lines = self._wrap_text(text, self.font_metrics, available_text_w, max_lines)
+        # If truncated, add an ellipsis hint
+        total_raw_lines = self._wrap_text(text, self.font_metrics, available_text_w)
+        is_truncated = max_lines is not None and len(total_raw_lines) > max_lines
+        if is_truncated:
+            text_lines.append("...")
         text_height = len(text_lines) * self.font_metrics.height() + (len(text_lines) - 1) * line_gap + 10
 
         longest_line_w = max(
@@ -804,10 +826,16 @@ class DanmuOverlay(QWidget):
         if item.has_image and not self._effective_show_image():
             text = "[图片] " + text
 
-        # Measure content inside card with word wrap, preserving hard line breaks
+        # Measure content inside card — truncate if setting enabled
+        max_lines = None
+        if self.engine.truncate_long_messages:
+            max_lines = self.engine.max_message_lines
         text_w = w - padding * 2 - (avatar_size + gap if self._effective_show_avatar() else 0)
         text_w = max(40, text_w)
-        content_lines = self._wrap_text(text, content_fm, int(text_w))
+        content_lines = self._wrap_text(text, content_fm, int(text_w), max_lines)
+        total_raw = self._wrap_text(text, content_fm, int(text_w))
+        if max_lines is not None and len(total_raw) > max_lines:
+            content_lines.append("...")
         line_h = content_fm.height()
         content_h = len(content_lines) * line_h + (len(content_lines) - 1) * 2
 
@@ -912,9 +940,15 @@ class DanmuOverlay(QWidget):
         if item.has_image and not self._effective_show_image():
             text = "[图片] " + text
 
+        max_lines = None
+        if self.engine.truncate_long_messages:
+            max_lines = self.engine.max_message_lines
         text_w = w - padding * 2 - (avatar_size + gap if self._effective_show_avatar() else 0)
         text_w = max(40, text_w)
-        content_lines = self._wrap_text(text, content_fm, int(text_w))
+        content_lines = self._wrap_text(text, content_fm, int(text_w), max_lines)
+        total_raw = self._wrap_text(text, content_fm, int(text_w))
+        if max_lines is not None and len(total_raw) > max_lines:
+            content_lines.append("...")
         line_h = content_fm.height()
         content_h = len(content_lines) * line_h + (len(content_lines) - 1) * 2
 

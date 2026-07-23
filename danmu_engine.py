@@ -61,6 +61,8 @@ class DanmuEngine:
         self.show_nickname: bool = True
         self.show_image: bool = True
         self.simple_mode: bool = False
+        self.truncate_long_messages: bool = True
+        self.max_message_lines: int = 3
         self.opacity: int = 100
         self.top_margin: int = 0
 
@@ -85,6 +87,8 @@ class DanmuEngine:
         self.show_nickname = display_config.get("showNickname", self.show_nickname)
         self.show_image = display_config.get("showImage", self.show_image)
         self.simple_mode = display_config.get("simpleMode", self.simple_mode)
+        self.truncate_long_messages = display_config.get("truncateLongMessages", self.truncate_long_messages)
+        self.max_message_lines = display_config.get("maxMessageLines", self.max_message_lines)
         self.opacity = display_config.get("danmuOpacity", self.opacity)
         self.top_margin = display_config.get("topMargin", self.top_margin)
         self.init_tracks()

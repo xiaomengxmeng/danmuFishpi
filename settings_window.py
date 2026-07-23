@@ -6,8 +6,8 @@ PyQt6-based settings panel styled to match the original GitHub-style drawer.
 import logging
 from typing import Callable
 
-from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QFont
+from PyQt6.QtCore import Qt, pyqtSignal, QRectF, QPropertyAnimation, QEasingCurve
+from PyQt6.QtGui import QFont, QPainter, QColor, QPen, QBrush, QLinearGradient
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QWidget, QLabel, QLineEdit,
     QPushButton, QSlider, QCheckBox, QButtonGroup, QComboBox, QMessageBox,
@@ -20,6 +20,92 @@ logger = logging.getLogger("danmuFishpi.settings")
 
 APP_NAME = "弹幕鱼排"
 APP_VERSION = "1.0.0"
+
+
+class ToggleSwitch(QWidget):
+    """Custom iOS-style toggle switch widget.
+
+    Draws a pill-shaped toggle with a circular knob that slides left/right.
+    Smooth animation on state change.
+    """
+
+    toggled = pyqtSignal(bool)
+
+    def __init__(self, checked: bool = False, parent=None):
+        super().__init__(parent)
+        self._checked = checked
+        self._anim_progress = 1.0 if checked else 0.0
+        self.setFixedSize(44, 24)
+
+        self._anim = QPropertyAnimation(self, b"anim_progress", self)
+        self._anim.setDuration(200)
+        self._anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+
+    def _get_anim_progress(self) -> float:
+        return self._anim_progress
+
+    def _set_anim_progress(self, v: float):
+        self._anim_progress = v
+        self.update()
+
+    anim_progress = property(_get_anim_progress, _set_anim_progress)
+
+    def isChecked(self) -> bool:
+        return self._checked
+
+    def setChecked(self, checked: bool):
+        self._checked = checked
+        target = 1.0 if checked else 0.0
+        self._anim.stop()
+        self._anim.setStartValue(self._anim_progress)
+        self._anim.setEndValue(target)
+        self._anim.start()
+
+    def mousePressEvent(self, event):
+        self._checked = not self._checked
+        target = 1.0 if self._checked else 0.0
+        self._anim.stop()
+        self._anim.setStartValue(self._anim_progress)
+        self._anim.setEndValue(target)
+        self._anim.start()
+        self.toggled.emit(self._checked)
+        super().mousePressEvent(event)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        w = self.width()
+        h = self.height()
+        r = h / 2.0  # pill radius
+
+        # Track background
+        track_color = QColor(58, 63, 71) if self._anim_progress < 0.5 else \
+            QColor(int(58 + (35 - 58) * (self._anim_progress - 0.5) * 2),
+                   int(63 + (134 - 63) * (self._anim_progress - 0.5) * 2),
+                   int(71 + (54 - 71) * (self._anim_progress - 0.5) * 2))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QBrush(track_color))
+        painter.drawRoundedRect(QRectF(0, 0, w, h), r, r)
+
+        # Knob position
+        knob_margin = 2
+        knob_size = h - knob_margin * 2
+        max_x = w - knob_size - knob_margin
+        knob_x = knob_margin + (max_x - knob_margin) * self._anim_progress
+        knob_y = knob_margin
+
+        # Knob shadow
+        shadow_color = QColor(0, 0, 0, 40)
+        painter.setBrush(QBrush(shadow_color))
+        painter.drawEllipse(QRectF(knob_x + 0.5, knob_y + 0.5, knob_size, knob_size))
+
+        # Knob
+        knob_color = QColor(255, 255, 255)
+        painter.setBrush(QBrush(knob_color))
+        painter.drawEllipse(QRectF(knob_x, knob_y, knob_size, knob_size))
+
+        painter.end()
 
 
 class SettingsDialog(QDialog):
@@ -209,22 +295,7 @@ class SettingsDialog(QDialog):
                 border-color: {c['border_active']};
                 color: {c['accent']};
             }}
-            QCheckBox {{
-                color: {c['text_primary']};
-                spacing: 8px;
-                font-size: 12px;
-            }}
-            QCheckBox::indicator {{
-                width: 16px;
-                height: 16px;
-                border-radius: 3px;
-                border: 1px solid {c['border']};
-                background: {c['bg_input']};
-            }}
-            QCheckBox::indicator:checked {{
-                background: {c['success']};
-                border-color: {c['success_border']};
-            }}
+            /* Toggle switches are custom-painted via ToggleSwitch widget */
             QSlider::groove:horizontal {{
                 height: 4px;
                 background: {c['bg_input']};
@@ -416,41 +487,62 @@ class SettingsDialog(QDialog):
 
         layout.addStretch()
 
+    def _toggle_row(self, label_text: str, initial: bool) -> tuple[QWidget, ToggleSwitch]:
+        """Create a row with a label and toggle switch."""
+        row = QWidget()
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setSpacing(8)
+        lbl = QLabel(label_text)
+        lbl.setProperty("class", "fieldLabel")
+        toggle = ToggleSwitch(initial, self)
+        row_layout.addWidget(lbl)
+        row_layout.addStretch()
+        row_layout.addWidget(toggle)
+        return row, toggle
+
     def _build_display_panel(self):
         self.panel_display = QWidget()
         layout = QVBoxLayout(self.panel_display)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(14)
+        layout.setSpacing(10)
 
-        # Options
+        # ── Display Elements ──
         layout.addWidget(self._section_label("显示元素"))
-        options_layout = QHBoxLayout()
-        options_layout.setSpacing(4)
-        self.chk_avatar = QCheckBox("头像")
-        self.chk_nickname = QCheckBox("昵称")
-        self.chk_image = QCheckBox("图片")
-        self.chk_red_packet = QCheckBox("红包")
-        self.chk_outline = QCheckBox("文字描边")
-        self.chk_simple_mode = QCheckBox("简约模式")
-        options_layout.addWidget(self.chk_avatar)
-        options_layout.addWidget(self.chk_nickname)
-        options_layout.addWidget(self.chk_image)
-        options_layout.addWidget(self.chk_red_packet)
-        options_layout.addWidget(self.chk_outline)
-        layout.addLayout(options_layout)
-        layout.addWidget(self.chk_simple_mode)
+        elements_grid = QVBoxLayout()
+        elements_grid.setSpacing(6)
+        elements_grid.setContentsMargins(0, 0, 0, 0)
 
-        # Notification switches
+        row_avatar, self.chk_avatar = self._toggle_row("头像", True)
+        elements_grid.addWidget(row_avatar)
+        row_nick, self.chk_nickname = self._toggle_row("昵称", True)
+        elements_grid.addWidget(row_nick)
+        row_img, self.chk_image = self._toggle_row("图片", True)
+        elements_grid.addWidget(row_img)
+        row_rp, self.chk_red_packet = self._toggle_row("红包", True)
+        elements_grid.addWidget(row_rp)
+        row_outline, self.chk_outline = self._toggle_row("文字描边", True)
+        elements_grid.addWidget(row_outline)
+        row_simple, self.chk_simple_mode = self._toggle_row("简约模式", False)
+        elements_grid.addWidget(row_simple)
+        row_truncate, self.chk_truncate = self._toggle_row("截断超长消息", True)
+        elements_grid.addWidget(row_truncate)
+
+        layout.addLayout(elements_grid)
+
+        # ── Notification ──
+        layout.addSpacing(6)
         layout.addWidget(self._section_label("通知"))
-        notify_layout = QHBoxLayout()
-        notify_layout.setSpacing(4)
-        self.chk_notify_startup = QCheckBox("启动提示")
-        self.chk_notify_login = QCheckBox("登录提示")
-        self.chk_notify_follow = QCheckBox("特别关注提示")
-        notify_layout.addWidget(self.chk_notify_startup)
-        notify_layout.addWidget(self.chk_notify_login)
-        notify_layout.addWidget(self.chk_notify_follow)
-        layout.addLayout(notify_layout)
+        notify_grid = QVBoxLayout()
+        notify_grid.setSpacing(6)
+        notify_grid.setContentsMargins(0, 0, 0, 0)
+        row_notify_startup, self.chk_notify_startup = self._toggle_row("启动提示", True)
+        notify_grid.addWidget(row_notify_startup)
+        row_notify_login, self.chk_notify_login = self._toggle_row("登录提示", True)
+        notify_grid.addWidget(row_notify_login)
+        row_notify_follow, self.chk_notify_follow = self._toggle_row("特别关注提示", True)
+        notify_grid.addWidget(row_notify_follow)
+        layout.addLayout(notify_grid)
 
         # Area
         layout.addWidget(self._section_label("弹幕区域"))
@@ -509,15 +601,16 @@ class SettingsDialog(QDialog):
         layout.addWidget(self.btn_send_test)
 
         # Live-apply display changes
-        self.chk_avatar.stateChanged.connect(self._emit_config_save)
-        self.chk_nickname.stateChanged.connect(self._emit_config_save)
-        self.chk_image.stateChanged.connect(self._emit_config_save)
-        self.chk_red_packet.stateChanged.connect(self._emit_config_save)
-        self.chk_outline.stateChanged.connect(self._emit_config_save)
-        self.chk_simple_mode.stateChanged.connect(self._emit_config_save)
-        self.chk_notify_startup.stateChanged.connect(self._emit_config_save)
-        self.chk_notify_login.stateChanged.connect(self._emit_config_save)
-        self.chk_notify_follow.stateChanged.connect(self._emit_config_save)
+        self.chk_avatar.toggled.connect(self._emit_config_save)
+        self.chk_nickname.toggled.connect(self._emit_config_save)
+        self.chk_image.toggled.connect(self._emit_config_save)
+        self.chk_red_packet.toggled.connect(self._emit_config_save)
+        self.chk_outline.toggled.connect(self._emit_config_save)
+        self.chk_simple_mode.toggled.connect(self._emit_config_save)
+        self.chk_truncate.toggled.connect(self._emit_config_save)
+        self.chk_notify_startup.toggled.connect(self._emit_config_save)
+        self.chk_notify_login.toggled.connect(self._emit_config_save)
+        self.chk_notify_follow.toggled.connect(self._emit_config_save)
         self.combo_area.currentIndexChanged.connect(self._emit_config_save)
         self.combo_font.currentTextChanged.connect(self._emit_config_save)
         self.slider_speed.valueChanged.connect(self._emit_config_save)
@@ -622,6 +715,7 @@ class SettingsDialog(QDialog):
         self.chk_red_packet.setChecked(self.config.display.show_red_packet)
         self.chk_outline.setChecked(self.config.display.show_outline)
         self.chk_simple_mode.setChecked(self.config.display.simple_mode)
+        self.chk_truncate.setChecked(self.config.display.truncate_long_messages)
         self.chk_notify_startup.setChecked(self.config.display.notify_startup)
         self.chk_notify_login.setChecked(self.config.display.notify_login)
         self.chk_notify_follow.setChecked(self.config.display.notify_follow)
@@ -742,6 +836,8 @@ class SettingsDialog(QDialog):
             "showRedPacket": self.chk_red_packet.isChecked(),
             "showOutline": self.chk_outline.isChecked(),
             "simpleMode": self.chk_simple_mode.isChecked(),
+            "truncateLongMessages": self.chk_truncate.isChecked(),
+            "maxMessageLines": 3,
             "topMargin": self.slider_top_margin.value(),
             "notifyStartup": self.chk_notify_startup.isChecked(),
             "notifyLogin": self.chk_notify_login.isChecked(),

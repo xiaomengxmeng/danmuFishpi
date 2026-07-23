@@ -93,6 +93,8 @@ class Display:
     danmu_opacity: int = 100           # 30-100 percentage
     font_size: int = 24                # 12-48 px
     font_family: str = "Microsoft YaHei"  # font family name
+    truncate_long_messages: bool = True  # truncate code blocks / long messages
+    max_message_lines: int = 3           # max text lines before truncation
 
 
 @dataclass
@@ -143,6 +145,8 @@ def config_to_dict(cfg: Config) -> dict:
         "danmuOpacity": disp["danmu_opacity"],
         "fontSize": disp["font_size"],
         "fontFamily": disp["font_family"],
+        "truncateLongMessages": disp["truncate_long_messages"],
+        "maxMessageLines": disp["max_message_lines"],
     }
     # Rename root fields
     d["hotkey"] = d.pop("hotkey", "f9")
@@ -181,6 +185,8 @@ def config_from_dict(d: dict) -> Config:
         danmu_opacity=disp.get("danmuOpacity", 100),
         font_size=disp.get("fontSize", 24),
         font_family=disp.get("fontFamily", "Microsoft YaHei"),
+        truncate_long_messages=disp.get("truncateLongMessages", True),
+        max_message_lines=disp.get("maxMessageLines", 3),
     )
     cfg.hotkey = d.get("hotkey", "f9")
     cfg.boss_key = d.get("bossKey", "f10")
