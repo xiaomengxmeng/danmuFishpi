@@ -139,6 +139,15 @@ class DanmuOverlay(QWidget):
         except (RuntimeError, ValueError, TypeError):
             pass
 
+    def _effective_show_avatar(self) -> bool:
+        return self.engine.show_avatar and not self.engine.simple_mode
+
+    def _effective_show_image(self) -> bool:
+        return self.engine.show_image and not self.engine.simple_mode
+
+    def _nickname_color(self) -> QColor:
+        return self.theme["text"] if self.engine.simple_mode else self.theme["nickname"]
+
     def toggle_visibility(self) -> None:
         """Toggle danmu visibility on/off."""
         self.visible_flag = not self.visible_flag
@@ -504,14 +513,14 @@ class DanmuOverlay(QWidget):
 
         # Parse text and images
         text, img_urls = self._parse_content(item.content)
-        show_images = self.engine.show_image and item.has_image and img_urls
+        show_images = self._effective_show_image() and item.has_image and img_urls
 
-        if item.has_image and not self.engine.show_image:
+        if item.has_image and not self._effective_show_image():
             text = "[图片] " + text
 
         # Prefix size (avatar + nickname)
         prefix_w = 0
-        if self.engine.show_avatar and item.nickname:
+        if self._effective_show_avatar() and item.nickname:
             prefix_w += avatar_size + 8
         nick_text = ""
         if self.engine.show_nickname and item.nickname:
@@ -573,14 +582,14 @@ class DanmuOverlay(QWidget):
             text_x = padding
 
             # Draw avatar
-            if self.engine.show_avatar and item.nickname:
+            if self._effective_show_avatar() and item.nickname:
                 self._draw_avatar(p, text_x, 5, avatar_size, item.nickname, item.avatar_url)
                 text_x += avatar_size + 8
 
             # Draw nickname
             if self.engine.show_nickname and item.nickname:
                 self._draw_text_with_outline(p, nick_text, text_x, text_y,
-                                             self.theme["nickname"])
+                                             self._nickname_color())
                 text_x += self.font_metrics.horizontalAdvance(nick_text) + 8
 
             # Draw content (preserving hard line breaks)
@@ -720,12 +729,12 @@ class DanmuOverlay(QWidget):
         content_fm = QFontMetrics(content_font)
 
         text, img_urls = self._parse_content(item.content)
-        show_images = self.engine.show_image and item.has_image and img_urls
-        if item.has_image and not self.engine.show_image:
+        show_images = self._effective_show_image() and item.has_image and img_urls
+        if item.has_image and not self._effective_show_image():
             text = "[图片] " + text
 
         # Measure content inside card with word wrap, preserving hard line breaks
-        text_w = w - padding * 2 - (avatar_size + gap if self.engine.show_avatar else 0)
+        text_w = w - padding * 2 - (avatar_size + gap if self._effective_show_avatar() else 0)
         text_w = max(40, text_w)
         content_lines = self._wrap_text(text, content_fm, int(text_w))
         line_h = content_fm.height()
@@ -767,7 +776,7 @@ class DanmuOverlay(QWidget):
 
         # Draw avatar
         text_x = x + padding
-        if self.engine.show_avatar and item.nickname:
+        if self._effective_show_avatar() and item.nickname:
             self._draw_avatar(painter, text_x, y + padding + (total_h - padding * 2 - avatar_size) / 2,
                               avatar_size, item.nickname, item.avatar_url)
             text_x += avatar_size + gap
@@ -775,7 +784,7 @@ class DanmuOverlay(QWidget):
         # Draw nickname
         text_y = y + padding + nick_fm.ascent()
         if self.engine.show_nickname and item.nickname:
-            painter.setPen(QPen(self.theme["nickname"]))
+            painter.setPen(QPen(self._nickname_color()))
             painter.setFont(nick_font)
             painter.drawText(int(text_x), int(text_y), item.nickname)
 
@@ -828,11 +837,11 @@ class DanmuOverlay(QWidget):
         content_fm = QFontMetrics(content_font)
 
         text, img_urls = self._parse_content(item.content)
-        show_images = self.engine.show_image and item.has_image and img_urls
-        if item.has_image and not self.engine.show_image:
+        show_images = self._effective_show_image() and item.has_image and img_urls
+        if item.has_image and not self._effective_show_image():
             text = "[图片] " + text
 
-        text_w = w - padding * 2 - (avatar_size + gap if self.engine.show_avatar else 0)
+        text_w = w - padding * 2 - (avatar_size + gap if self._effective_show_avatar() else 0)
         text_w = max(40, text_w)
         content_lines = self._wrap_text(text, content_fm, int(text_w))
         line_h = content_fm.height()
@@ -872,14 +881,14 @@ class DanmuOverlay(QWidget):
         painter.drawRoundedRect(QRectF(x, y, w, total_h), 12, 12)
 
         text_x = x + padding
-        if self.engine.show_avatar and item.nickname:
+        if self._effective_show_avatar() and item.nickname:
             self._draw_avatar(painter, text_x, y + padding + (total_h - padding * 2 - avatar_size) / 2,
                               avatar_size, item.nickname, item.avatar_url)
             text_x += avatar_size + gap
 
         text_y = y + padding + nick_fm.ascent()
         if self.engine.show_nickname and item.nickname:
-            painter.setPen(QPen(self.theme["nickname"]))
+            painter.setPen(QPen(self._nickname_color()))
             painter.setFont(nick_font)
             painter.drawText(int(text_x), int(text_y), item.nickname)
 

@@ -79,6 +79,7 @@ class App:
             "showImage": self.config.display.show_image,
             "showRedPacket": self.config.display.show_red_packet,
             "showOutline": self.config.display.show_outline,
+            "simpleMode": self.config.display.simple_mode,
             "topMargin": self.config.display.top_margin,
             "danmuSpeed": self.config.display.danmu_speed,
             "danmuArea": self.config.display.danmu_area,
@@ -127,6 +128,16 @@ class App:
         self._register_hotkey_with_fallback()
         active_hotkey = self.hotkey_mgr._current_hotkey or "未注册"
         logger.info(f"Current global hotkey: {active_hotkey}")
+
+        # Boss key (F10) to toggle danmu visibility
+        self.boss_key_mgr = HotkeyManager()
+        self.boss_key_mgr.install_filter()
+        if self.boss_key_mgr.register("f10", self.toggle_danmu):
+            logger.info("Boss key F10 registered")
+            print("[danmuFishpi] 老板键 F10 已注册", flush=True)
+        else:
+            logger.warning("Failed to register boss key F10")
+            print("[danmuFishpi] 老板键 F10 注册失败", flush=True)
         if self.config.display.notify_startup:
             self.notification_manager.show(
                 "热键已就绪",
@@ -399,6 +410,7 @@ class App:
         self.config.display.show_red_packet = display_config.get("showRedPacket", self.config.display.show_red_packet)
         self.config.display.play_sound = display_config.get("playSound", self.config.display.play_sound)
         self.config.display.show_outline = display_config.get("showOutline", self.config.display.show_outline)
+        self.config.display.simple_mode = display_config.get("simpleMode", self.config.display.simple_mode)
         self.config.display.top_margin = display_config.get("topMargin", self.config.display.top_margin)
         self.config.display.notify_startup = display_config.get("notifyStartup", self.config.display.notify_startup)
         self.config.display.notify_login = display_config.get("notifyLogin", self.config.display.notify_login)
@@ -451,6 +463,7 @@ class App:
             "showImage": self.config.display.show_image,
             "showRedPacket": self.config.display.show_red_packet,
             "showOutline": self.config.display.show_outline,
+            "simpleMode": self.config.display.simple_mode,
             "topMargin": self.config.display.top_margin,
             "danmuSpeed": self.config.display.danmu_speed,
             "danmuArea": self.config.display.danmu_area,
@@ -474,6 +487,7 @@ class App:
                 self.conn.stop()
                 self.conn = None
         self.hotkey_mgr.unregister()
+        self.boss_key_mgr.unregister()
         self.overlay.stop_render_loop()
         self.app.quit()
 

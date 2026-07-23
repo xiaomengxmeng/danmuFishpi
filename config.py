@@ -81,6 +81,7 @@ class Display:
     followed_user_ids: list[str] = field(default_factory=list)
     play_sound: bool = False           # deprecated, kept for compatibility
     show_outline: bool = True          # text outline on danmu
+    simple_mode: bool = False          # minimal visual style
     top_margin: int = 0                # 0-300 px
     notify_startup: bool = True
     notify_login: bool = True
@@ -129,6 +130,7 @@ def config_to_dict(cfg: Config) -> dict:
         "followedUserIds": disp["followed_user_ids"],
         "playSound": disp["play_sound"],
         "showOutline": disp["show_outline"],
+        "simpleMode": disp["simple_mode"],
         "topMargin": disp["top_margin"],
         "notifyStartup": disp["notify_startup"],
         "notifyLogin": disp["notify_login"],
@@ -163,6 +165,7 @@ def config_from_dict(d: dict) -> Config:
         followed_user_ids=disp.get("followedUserIds", []),
         play_sound=disp.get("playSound", False),
         show_outline=disp.get("showOutline", True),
+        simple_mode=disp.get("simpleMode", False),
         top_margin=disp.get("topMargin", 0),
         notify_startup=disp.get("notifyStartup", True),
         notify_login=disp.get("notifyLogin", True),

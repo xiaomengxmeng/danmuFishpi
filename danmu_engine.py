@@ -60,6 +60,7 @@ class DanmuEngine:
         self.show_avatar: bool = True
         self.show_nickname: bool = True
         self.show_image: bool = True
+        self.simple_mode: bool = False
         self.opacity: int = 100
         self.top_margin: int = 0
 
@@ -83,6 +84,7 @@ class DanmuEngine:
         self.show_avatar = display_config.get("showAvatar", self.show_avatar)
         self.show_nickname = display_config.get("showNickname", self.show_nickname)
         self.show_image = display_config.get("showImage", self.show_image)
+        self.simple_mode = display_config.get("simpleMode", self.simple_mode)
         self.opacity = display_config.get("danmuOpacity", self.opacity)
         self.top_margin = display_config.get("topMargin", self.top_margin)
         self.init_tracks()

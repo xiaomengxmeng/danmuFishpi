@@ -431,12 +431,14 @@ class SettingsDialog(QDialog):
         self.chk_image = QCheckBox("图片")
         self.chk_red_packet = QCheckBox("红包")
         self.chk_outline = QCheckBox("文字描边")
+        self.chk_simple_mode = QCheckBox("简约模式")
         options_layout.addWidget(self.chk_avatar)
         options_layout.addWidget(self.chk_nickname)
         options_layout.addWidget(self.chk_image)
         options_layout.addWidget(self.chk_red_packet)
         options_layout.addWidget(self.chk_outline)
         layout.addLayout(options_layout)
+        layout.addWidget(self.chk_simple_mode)
 
         # Notification switches
         layout.addWidget(self._section_label("通知"))
@@ -512,6 +514,7 @@ class SettingsDialog(QDialog):
         self.chk_image.stateChanged.connect(self._emit_config_save)
         self.chk_red_packet.stateChanged.connect(self._emit_config_save)
         self.chk_outline.stateChanged.connect(self._emit_config_save)
+        self.chk_simple_mode.stateChanged.connect(self._emit_config_save)
         self.chk_notify_startup.stateChanged.connect(self._emit_config_save)
         self.chk_notify_login.stateChanged.connect(self._emit_config_save)
         self.chk_notify_follow.stateChanged.connect(self._emit_config_save)
@@ -613,6 +616,7 @@ class SettingsDialog(QDialog):
         self.chk_image.setChecked(self.config.display.show_image)
         self.chk_red_packet.setChecked(self.config.display.show_red_packet)
         self.chk_outline.setChecked(self.config.display.show_outline)
+        self.chk_simple_mode.setChecked(self.config.display.simple_mode)
         self.chk_notify_startup.setChecked(self.config.display.notify_startup)
         self.chk_notify_login.setChecked(self.config.display.notify_login)
         self.chk_notify_follow.setChecked(self.config.display.notify_follow)
@@ -730,6 +734,7 @@ class SettingsDialog(QDialog):
             "showImage": self.chk_image.isChecked(),
             "showRedPacket": self.chk_red_packet.isChecked(),
             "showOutline": self.chk_outline.isChecked(),
+            "simpleMode": self.chk_simple_mode.isChecked(),
             "topMargin": self.slider_top_margin.value(),
             "notifyStartup": self.chk_notify_startup.isChecked(),
             "notifyLogin": self.chk_notify_login.isChecked(),
