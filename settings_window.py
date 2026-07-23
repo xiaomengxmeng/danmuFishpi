@@ -574,6 +574,8 @@ class SettingsDialog(QDialog):
             self.content_layout.addWidget(self.panel_display)
         elif tab_id == "hotkey":
             self.content_layout.addWidget(self.panel_hotkey)
+        elif tab_id == "block_follow":
+            self.content_layout.addWidget(self.panel_block_follow)
 
     # ── Form Population ─────────────────────────────────────────
 
@@ -661,7 +663,6 @@ class SettingsDialog(QDialog):
         layout.addWidget(hint_block)
         self.text_blocked_ids = QTextEdit()
         self.text_blocked_ids.setPlaceholderText("user1\nuser2")
-        self.text_blocked_ids.setMaximumBlockCount(100)
         layout.addWidget(self.text_blocked_ids)
 
         # Follow list
@@ -671,7 +672,6 @@ class SettingsDialog(QDialog):
         layout.addWidget(hint_follow)
         self.text_followed_ids = QTextEdit()
         self.text_followed_ids.setPlaceholderText("friend1\nfriend2")
-        self.text_followed_ids.setMaximumBlockCount(100)
         layout.addWidget(self.text_followed_ids)
 
         # Save button
@@ -682,7 +682,7 @@ class SettingsDialog(QDialog):
         layout.addWidget(self.btn_save_block_follow)
 
         layout.addStretch()
-        self._panels["block_follow"] = panel
+        self.panel_block_follow = panel
 
     def _emit_config_save(self):
         area_map = {0: "fullscreen", 1: "topHalf", 2: "bottomHalf"}
