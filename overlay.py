@@ -13,7 +13,7 @@ import logging
 import sys
 import time
 
-from PyQt6.QtCore import Qt, QTimer, QRectF, QPointF
+from PyQt6.QtCore import Qt, QTimer, QRect, QRectF, QPointF
 from PyQt6.QtGui import (
     QColor, QFont, QFontMetrics, QPainter, QPainterPath, QPen, QPixmap,
 )

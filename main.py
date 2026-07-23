@@ -67,6 +67,7 @@ class App:
             "danmuHeight": self.config.display.danmu_height,
             "danmuOpacity": self.config.display.danmu_opacity,
             "fontSize": self.config.display.font_size,
+            "fontFamily": self.config.display.font_family,
         })
 
         self.overlay = DanmuOverlay(self.engine)
@@ -102,23 +103,7 @@ class App:
         # Create hotkey manager
         self.hotkey_mgr = HotkeyManager()
         self.hotkey_mgr.install_filter()
-        if self.config.hotkey:
-            old_hotkey = self.config.hotkey
-            if not self.hotkey_mgr.register(old_hotkey, self.show_input_box):
-                # Fallback to ctrl+shift+enter if the configured hotkey is taken
-                fallback = "ctrl+shift+enter"
-                if self.hotkey_mgr.register(fallback, self.show_input_box):
-                    self.config.hotkey = fallback
-                    cfg_module.save(self.config)
-                    self.tray.show_message(
-                        "弹幕鱼排",
-                        f"快捷键 '{old_hotkey}' 被占用，已自动切换为 '{fallback}'。",
-                    )
-                else:
-                    self.tray.show_message(
-                        "弹幕鱼排",
-                        f"快捷键 '{old_hotkey}' 注册失败，可能已被其他程序占用。\n请在设置中更换。",
-                    )
+        self._register_hotkey_with_fallback()
 
         # Settings dialog (created lazily)
         self.settings_dialog = None
@@ -280,7 +265,35 @@ class App:
             self.input_box.hide()
         self.overlay.set_click_through(True)
 
-    # ── Settings ───────────────────────────────────────────────
+    def _register_hotkey_with_fallback(self) -> None:
+        """Register the configured global hotkey, trying fallbacks if taken."""
+        configured = (self.config.hotkey or "ctrl+shift+enter").strip()
+        fallbacks = ["ctrl+shift+enter", "ctrl+alt+enter", "ctrl+shift+m", "ctrl+alt+shift+enter"]
+
+        # Build ordered list of candidates without duplicates
+        candidates = []
+        for hk in [configured] + fallbacks:
+            if hk and hk not in candidates:
+                candidates.append(hk)
+
+        for hotkey in candidates:
+            if self.hotkey_mgr.register(hotkey, self.show_input_box):
+                if hotkey != configured:
+                    self.config.hotkey = hotkey
+                    cfg_module.save(self.config, self.config_path)
+                    self.tray.show_message(
+                        "弹幕鱼排",
+                        f"快捷键 '{configured}' 被占用，已自动切换为 '{hotkey}'。",
+                    )
+                return
+
+        self.tray.show_message(
+            "弹幕鱼排",
+            f"所有候选快捷键（{', '.join(candidates)}）均注册失败，\n"
+            "可能已有其他程序占用了这些组合键。请在设置中手动更换。",
+        )
+
+    # ── Settings ────────────────────────────────
 
     def show_settings(self) -> None:
         """Show the settings dialog docked to the right edge of the screen."""
@@ -291,7 +304,8 @@ class App:
             self.settings_dialog.config_saved.connect(self._on_config_saved)
             self.settings_dialog.send_message_requested.connect(self.send_message)
             # Sync current connection state
-            self.settings_dialog.set_connected(self.chatroom.is_connected)
+            is_connected = self.conn.is_connected if self.conn else False
+            self.settings_dialog.set_connected(is_connected)
 
         # Disable click-through while settings are open
         self.overlay.set_click_through(False)
@@ -321,6 +335,7 @@ class App:
         self.config.display.danmu_height = display_config.get("danmuHeight", self.config.display.danmu_height)
         self.config.display.danmu_opacity = display_config.get("danmuOpacity", self.config.display.danmu_opacity)
         self.config.display.font_size = display_config.get("fontSize", self.config.display.font_size)
+        self.config.display.font_family = display_config.get("fontFamily", self.config.display.font_family)
 
         cfg_module.save(self.config, self.config_path)
 
@@ -337,7 +352,7 @@ class App:
         # Re-register hotkey if it changed
         new_hotkey = self.config.hotkey
         if new_hotkey and new_hotkey != self.hotkey_mgr._current_hotkey:
-            self.hotkey_mgr.register(new_hotkey, self.show_input_box)
+            self._register_hotkey_with_fallback()
 
     # ── Tray callbacks ─────────────────────────────────────────
 
@@ -360,6 +375,7 @@ class App:
             "danmuHeight": self.config.display.danmu_height,
             "danmuOpacity": self.config.display.danmu_opacity,
             "fontSize": self.config.display.font_size,
+            "fontFamily": self.config.display.font_family,
         }, self.config.theme)
         self.tray.set_mode_checked(mode)
         if self.settings_dialog:
@@ -380,6 +396,7 @@ class App:
             "danmuHeight": self.config.display.danmu_height,
             "danmuOpacity": self.config.display.danmu_opacity,
             "fontSize": self.config.display.font_size,
+            "fontFamily": self.config.display.font_family,
         }, theme)
         self.tray.set_theme_checked(theme)
         if self.settings_dialog:
