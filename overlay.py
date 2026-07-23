@@ -223,18 +223,21 @@ class DanmuOverlay(QWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
 
-        # Apply opacity
-        opacity = self.engine.opacity / 100.0
-        painter.setOpacity(opacity)
+        try:
+            # Apply opacity
+            opacity = self.engine.opacity / 100.0
+            painter.setOpacity(opacity)
 
-        if self.engine.mode == "scrolling":
-            self._paint_scrolling(painter)
-        elif self.engine.mode == "floating":
-            self._paint_floating(painter)
-        elif self.engine.mode == "bottom":
-            self._paint_bottom(painter)
-
-        painter.end()
+            if self.engine.mode == "scrolling":
+                self._paint_scrolling(painter)
+            elif self.engine.mode == "floating":
+                self._paint_floating(painter)
+            elif self.engine.mode == "bottom":
+                self._paint_bottom(painter)
+        except Exception as e:
+            logger.error(f"paintEvent error: {e}", exc_info=True)
+        finally:
+            painter.end()
 
     def _measure_item_width(self, item: DanmuItem) -> float:
         """Measure total width of a danmu item (avatar + nickname + content)."""
