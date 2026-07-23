@@ -13,6 +13,8 @@ _STYLE_RE = re.compile(r"(?is)<style[^>]*>.*?</style>")
 _IMG_RE = re.compile(r"(?is)<img[^>]*>")
 _TAG_RE = re.compile(r"<[^>]+>")
 _BR_RE = re.compile(r"(?is)<br\s*/?>|</p>|</div>|</h[1-6]>")
+_BLOCKQUOTE_RE = re.compile(r"(?is)<blockquote[^>]*>(.*?)</blockquote>")
+_Q_RE = re.compile(r"(?is)<q[^>]*>(.*?)</q>")
 
 # Placeholder pattern to restore img tags
 _PLACEHOLDER_RE = re.compile(r"\{\{IMG_(\d+)\}\}")
@@ -32,6 +34,14 @@ def clean_html(content: str) -> str:
     # Convert block/line-break tags to newlines before stripping tags
     content = _BR_RE.sub("\n", content)
 
+    # Preserve blockquote/q content with a quote prefix before stripping tags
+    def _quote_repl(m):
+        inner = _TAG_RE.sub("", m.group(1)).strip()
+        return f"> {inner}\n"
+
+    content = _BLOCKQUOTE_RE.sub(_quote_repl, content)
+    content = _Q_RE.sub(_quote_repl, content)
+
     # Protect <img> tags with placeholders
     img_tags = _IMG_RE.findall(content)
     for i, img_tag in enumerate(img_tags):
@@ -46,7 +56,13 @@ def clean_html(content: str) -> str:
         return img_tags[idx] if idx < len(img_tags) else ""
 
     content = _PLACEHOLDER_RE.sub(_restore, content)
-    return content.strip()
+    cleaned = content.strip()
+
+    # Fallback: if cleaning removed everything but the original had visible text,
+    # strip tags only and return it so the message is not lost.
+    if not cleaned and content:
+        cleaned = _TAG_RE.sub("", content).strip()
+    return cleaned
 
 
 def should_display(msg_type: str) -> bool:
