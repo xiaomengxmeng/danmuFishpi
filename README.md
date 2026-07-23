@@ -1,6 +1,6 @@
-# 弹幕鱼排 Python 版
+# 弹幕鱼排 
 
-弹幕鱼排（danmuFishpiPython）是一个在 Windows 桌面上显示 [fishpi](https://fishpi.cn) 聊天室弹幕的透明悬浮窗应用。它基于 PyQt6 绘制，覆盖在所有窗口之上，适合在打游戏或看视频时同步看到聊天消息。
+弹幕鱼排（danmuFishpi）是一个在 Windows 桌面上显示 [fishpi](https://fishpi.cn) 聊天室弹幕的透明悬浮窗应用。它基于 PyQt6 绘制，覆盖在所有窗口之上，方便工作娱乐时同步看到聊天消息。
 
 ## 主要功能
 
@@ -21,10 +21,6 @@
 ## 开发环境搭建
 
 1. 进入项目目录
-
-   ```powershell
-   cd D:\Dev\danmuFishpi\danmuFishpiPython
-   ```
 
 2. 创建并激活虚拟环境（可选但推荐）
 
@@ -120,7 +116,7 @@ pyinstaller --noconfirm --windowed --name "弹幕鱼排" main.py
 打包完成后，产物位于：
 
 ```text
-D:\Dev\danmuFishpi\danmuFishpiPython\dist\弹幕鱼排.exe
+dist\弹幕鱼排.exe
 ```
 
 直接运行该文件即可。首次运行仍会提示登录，之后自动连接。

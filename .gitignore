@@ -8,3 +8,4 @@ build/
 .env
 config.json
 *.spec
+docs/
