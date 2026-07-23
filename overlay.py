@@ -13,26 +13,21 @@ import logging
 import sys
 import time
 
-from PyQt6.QtCore import Qt, QTimer, QRect, QRectF, QPointF
+from PyQt6.QtCore import Qt, QTimer, QRect, QRectF, QPointF, QElapsedTimer
 from PyQt6.QtGui import (
     QColor, QFont, QFontMetrics, QPainter, QPainterPath, QPen, QPixmap,
 )
 from PyQt6.QtWidgets import QWidget, QApplication
-from PyQt6.QtCore import QElapsedTimer
 
 from danmu_engine import DanmuEngine, DanmuItem
 from image_cache import ImageCache
+from win32_overlay import (
+    apply_overlay_exstyles,
+    reassert_hwnd_topmost,
+    probe_exclusive_fullscreen_risk,
+)
 
 logger = logging.getLogger("danmuFishpi.overlay")
-
-# Win32 constants for click-through
-GWL_EXSTYLE = -20
-WS_EX_LAYERED = 0x00080000
-WS_EX_TRANSPARENT = 0x00000020
-
-_user32 = ctypes.windll.user32
-_GetWindowLongW = _user32.GetWindowLongW
-_SetWindowLongW = _user32.SetWindowLongW
 
 # Theme colors
 THEME_DARK = {
@@ -60,15 +55,7 @@ DT_CAP = 0.1
 
 def apply_click_through(hwnd: int, enable: bool) -> None:
     """Toggle WS_EX_TRANSPARENT on the window's extended style."""
-    if not hwnd:
-        return
-    ex_style = _GetWindowLongW(hwnd, GWL_EXSTYLE)
-    if enable:
-        ex_style |= WS_EX_LAYERED | WS_EX_TRANSPARENT
-    else:
-        ex_style &= ~WS_EX_TRANSPARENT
-        ex_style |= WS_EX_LAYERED  # Keep layered for transparency
-    _SetWindowLongW(hwnd, GWL_EXSTYLE, ex_style)
+    apply_overlay_exstyles(hwnd, click_through=enable)
 
 
 class DanmuOverlay(QWidget):
@@ -85,6 +72,7 @@ class DanmuOverlay(QWidget):
             Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
             | Qt.WindowType.Tool
+            | Qt.WindowType.BypassWindowManagerHint
         )
 
         # Critical transparency attributes
@@ -109,6 +97,8 @@ class DanmuOverlay(QWidget):
         self.timer = QTimer(self)
         self.timer.setTimerType(Qt.TimerType.PreciseTimer)
         self.timer.timeout.connect(self._tick)
+        self._topmost_timer: QTimer | None = None
+        self._topmost_fail_streak = 0
 
         self._tick_clock = QElapsedTimer()
         self._last_tick_valid = False
@@ -162,36 +152,68 @@ class DanmuOverlay(QWidget):
     def showEvent(self, event):
         """Apply Win32 click-through after window is shown (HWND available)."""
         super().showEvent(event)
-        # Apply click-through now that we have a HWND
-        try:
-            hwnd = int(self.winId())
-            if hwnd:
-                apply_click_through(hwnd, self.click_through)
-        except (RuntimeError, ValueError, TypeError):
-            # Retry on next event
-            QTimer.singleShot(100, lambda: self._retry_click_through())
+        self._apply_win32_exstyles(_defer_attempt=0)
 
-    def _retry_click_through(self):
+    def _apply_win32_exstyles(self, *, _defer_attempt: int = 0) -> None:
+        """Apply WS_EX_LAYERED + WS_EX_TRANSPARENT; retry if HWND not ready."""
         try:
             hwnd = int(self.winId())
-            if hwnd:
-                apply_click_through(hwnd, self.click_through)
         except (RuntimeError, ValueError, TypeError):
-            pass
+            return
+        if not hwnd:
+            try:
+                still_visible = self.isVisible()
+            except (RuntimeError, ValueError, TypeError):
+                return
+            if _defer_attempt < 3 and still_visible:
+                QTimer.singleShot(
+                    100,
+                    lambda attempt=_defer_attempt + 1: self._apply_win32_exstyles(
+                        _defer_attempt=attempt
+                    ),
+                )
+            return
+        apply_overlay_exstyles(hwnd, click_through=self.click_through)
 
     def start_render_loop(self) -> None:
-        """Start the 60fps render timer."""
+        """Start the 60fps render timer and topmost reassert timer."""
         if not self.isVisible():
             return
         self._last_tick_valid = False
         if not self.timer.isActive():
             self.timer.start(INTERVAL_MS)
+        if not getattr(self, "_topmost_timer", None):
+            self._topmost_timer = QTimer(self)
+            self._topmost_timer.timeout.connect(self._reassert_topmost)
+            self._topmost_timer.start(2000)
         self._tick()
 
     def stop_render_loop(self) -> None:
-        """Stop the render timer."""
+        """Stop the render timer and topmost reassert timer."""
         self.timer.stop()
         self._last_tick_valid = False
+        if getattr(self, "_topmost_timer", None):
+            self._topmost_timer.stop()
+
+    def _reassert_topmost(self) -> None:
+        """Periodically restore HWND_TOPMOST to stay above fullscreen games."""
+        if not self.isVisible():
+            return
+        self.raise_()
+        try:
+            hwnd = int(self.winId())
+        except (RuntimeError, ValueError, TypeError):
+            return
+        success = reassert_hwnd_topmost(hwnd)
+        if success:
+            self._topmost_fail_streak = 0
+        else:
+            self._topmost_fail_streak = getattr(self, "_topmost_fail_streak", 0) + 1
+            if self._topmost_fail_streak == 3:
+                logger.warning(
+                    "topmost reassert failed 3 times; overlay may be blocked "
+                    "by exclusive fullscreen or another topmost window"
+                )
 
     def _tick(self) -> None:
         """Animation tick: update positions and request repaint."""
