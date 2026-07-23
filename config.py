@@ -98,7 +98,7 @@ class Display:
 class Config:
     account: Account = field(default_factory=Account)
     display: Display = field(default_factory=Display)
-    hotkey: str = "alt+space"
+    hotkey: str = "f9"
     theme: str = "dark"                # dark | light
 
 
@@ -175,7 +175,7 @@ def config_from_dict(d: dict) -> Config:
         font_size=disp.get("fontSize", 24),
         font_family=disp.get("fontFamily", "Microsoft YaHei"),
     )
-    cfg.hotkey = d.get("hotkey", "alt+space")
+    cfg.hotkey = d.get("hotkey", "f9")
     cfg.theme = d.get("theme", "dark")
     return cfg
 

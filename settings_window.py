@@ -535,7 +535,7 @@ class SettingsDialog(QDialog):
         layout.addWidget(self._section_label("全局快捷键"))
         layout.addWidget(self._field_label("打开输入框快捷键"))
         self.input_hotkey = QLineEdit()
-        self.input_hotkey.setPlaceholderText("例如: alt+space")
+        self.input_hotkey.setPlaceholderText("例如: f9")
         layout.addWidget(self.input_hotkey)
 
         self.lbl_active_hotkey = QLabel("当前生效热键: 未注册")
@@ -641,7 +641,7 @@ class SettingsDialog(QDialog):
         self.btn_theme_dark.setChecked(theme == "dark")
         self.btn_theme_light.setChecked(theme == "light")
 
-        self.input_hotkey.setText(self.config.hotkey or "alt+space")
+        self.input_hotkey.setText(self.config.hotkey or "f9")
 
     # ── Event Handlers ──────────────────────────────────────────
 

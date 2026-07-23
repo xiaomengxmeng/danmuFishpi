@@ -322,8 +322,8 @@ class App:
 
     def _register_hotkey_with_fallback(self) -> None:
         """Register the configured global hotkey, trying fallbacks if taken."""
-        configured = (self.config.hotkey or "alt+space").strip()
-        fallbacks = ["alt+space", "ctrl+shift+enter", "ctrl+alt+enter", "ctrl+shift+m", "ctrl+alt+shift+enter"]
+        configured = (self.config.hotkey or "f9").strip()
+        fallbacks = ["f9", "ctrl+shift+enter", "ctrl+alt+enter", "ctrl+shift+m", "ctrl+alt+shift+enter"]
 
         # Build ordered list of candidates without duplicates
         candidates = []
