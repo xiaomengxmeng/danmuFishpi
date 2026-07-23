@@ -310,7 +310,7 @@ class DanmuOverlay(QWidget):
         """Measure total width of a danmu item (avatar + nickname + content)."""
         w = 16  # padding
 
-        if self.engine.show_avatar and item.nickname:
+        if self._effective_show_avatar() and item.nickname:
             w += int(self.engine.font_size * 1.4) + 8
 
         if self.engine.show_nickname and item.nickname:
@@ -320,10 +320,12 @@ class DanmuOverlay(QWidget):
 
         # Content width (strip HTML for measurement)
         content = self._strip_html(item.content)
-        if item.has_image and not self.engine.show_image:
+        if item.has_image and not self._effective_show_image():
             content = "[图片] " + content
         w += self.font_metrics.horizontalAdvance(content)
-        return w + 16  # padding
+        # Add extra safety margin for outline/antialiasing so the last
+        # character is not clipped.
+        return w + 24  # padding + outline safety margin
 
     def _strip_html(self, text: str) -> str:
         """Strip HTML tags for text measurement."""
@@ -924,6 +926,16 @@ class DanmuOverlay(QWidget):
 
     def add_message(self, msg: dict) -> None:
         """Add a new message to the engine and ensure render loop is running."""
+        # Prefetch images so they are already loaded when the danmu becomes visible.
+        avatar_url = msg.get("avatar_url", "")
+        if avatar_url:
+            self._image_cache.get(avatar_url)
+        content = msg.get("content", "")
+        if "<img" in content:
+            _, img_urls = self._parse_content(content)
+            for url in img_urls:
+                self._image_cache.get(url)
+
         self.engine.add_message(msg)
         if self.isVisible() and self.visible_flag:
             self.start_render_loop()

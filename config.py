@@ -100,6 +100,7 @@ class Config:
     account: Account = field(default_factory=Account)
     display: Display = field(default_factory=Display)
     hotkey: str = "f9"
+    boss_key: str = "f10"
     theme: str = "dark"                # dark | light
 
 
@@ -143,6 +144,9 @@ def config_to_dict(cfg: Config) -> dict:
         "fontSize": disp["font_size"],
         "fontFamily": disp["font_family"],
     }
+    # Rename root fields
+    d["hotkey"] = d.pop("hotkey", "f9")
+    d["bossKey"] = d.pop("boss_key", "f10")
     return d
 
 
@@ -179,6 +183,7 @@ def config_from_dict(d: dict) -> Config:
         font_family=disp.get("fontFamily", "Microsoft YaHei"),
     )
     cfg.hotkey = d.get("hotkey", "f9")
+    cfg.boss_key = d.get("bossKey", "f10")
     cfg.theme = d.get("theme", "dark")
     return cfg
 

@@ -27,6 +27,7 @@ def main():
         "--hidden-import", "certifi",
         "--hidden-import", "idna",
         "--hidden-import", "keyboard",
+        "--hidden-import", "mouse",
         "main.py",
     ]
 

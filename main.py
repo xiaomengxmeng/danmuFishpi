@@ -178,15 +178,16 @@ class App:
         active_hotkey = self.hotkey_mgr._current_hotkey or "未注册"
         logger.info(f"Current global hotkey: {active_hotkey}")
 
-        # Boss key (F10) to toggle danmu visibility
+        # Boss key to toggle danmu visibility
         self.boss_key_mgr = HotkeyManager()
         self.boss_key_mgr.install_filter()
-        if self.boss_key_mgr.register("f10", self.toggle_danmu):
-            logger.info("Boss key F10 registered")
-            print("[danmuFishpi] 老板键 F10 已注册", flush=True)
+        boss_key = (self.config.boss_key or "f10").strip()
+        if self.boss_key_mgr.register(boss_key, self.toggle_danmu):
+            logger.info(f"Boss key {boss_key} registered")
+            print(f"[danmuFishpi] 老板键 {boss_key} 已注册", flush=True)
         else:
-            logger.warning("Failed to register boss key F10")
-            print("[danmuFishpi] 老板键 F10 注册失败", flush=True)
+            logger.warning(f"Failed to register boss key {boss_key}")
+            print(f"[danmuFishpi] 老板键 {boss_key} 注册失败", flush=True)
         if self.config.display.notify_startup:
             self.notification_manager.show(
                 "热键已就绪",
@@ -490,10 +491,18 @@ class App:
         if self.input_box:
             self.input_box.set_theme(self.config.theme)
 
-        # Re-register hotkey if it changed
+        # Re-register hotkeys if they changed
         new_hotkey = self.config.hotkey
         if new_hotkey and new_hotkey != self.hotkey_mgr._current_hotkey:
             self._register_hotkey_with_fallback()
+
+        new_boss_key = self.config.boss_key
+        if new_boss_key and new_boss_key != self.boss_key_mgr._current_hotkey:
+            self.boss_key_mgr.unregister()
+            if self.boss_key_mgr.register(new_boss_key, self.toggle_danmu):
+                logger.info(f"Boss key changed to {new_boss_key}")
+            else:
+                logger.warning(f"Failed to change boss key to {new_boss_key}")
 
     # ── Tray callbacks ─────────────────────────────────────────
 
@@ -529,6 +538,7 @@ class App:
             "fontSize": self.config.display.font_size,
             "fontFamily": self.config.display.font_family,
         }, theme)
+        self.overlay.engine.clear_all()
         self.notification_manager.set_theme(theme)
         self.tray.set_theme_checked(theme)
         if self.settings_dialog:

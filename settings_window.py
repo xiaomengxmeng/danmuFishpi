@@ -62,8 +62,8 @@ class SettingsDialog(QDialog):
             "border": "#d0d7de" if is_light else "#30363d",
             "border_active": "#0969da" if is_light else "#58a6ff",
             "text_primary": "#1f2328" if is_light else "#e6edf3",
-            "text_secondary": "#656d76" if is_light else "#8b949e",
-            "text_muted": "#8c959f" if is_light else "#6e7681",
+            "text_secondary": "#656d76" if is_light else "#9ca3af",
+            "text_muted": "#8c959f" if is_light else "#b0b8c4",
             "accent": "#0969da" if is_light else "#58a6ff",
             "accent_bg": "rgba(9,105,218,0.12)" if is_light else "rgba(88,166,255,0.15)",
             "success": "#1f883d" if is_light else "#238636",
@@ -538,14 +538,19 @@ class SettingsDialog(QDialog):
         layout.addWidget(self._section_label("全局快捷键"))
         layout.addWidget(self._field_label("打开输入框快捷键"))
         self.input_hotkey = QLineEdit()
-        self.input_hotkey.setPlaceholderText("例如: f9")
+        self.input_hotkey.setPlaceholderText("例如: f9 或 mouse4")
         layout.addWidget(self.input_hotkey)
 
         self.lbl_active_hotkey = QLabel("当前生效热键: 未注册")
         self.lbl_active_hotkey.setObjectName("hintLabel")
         layout.addWidget(self.lbl_active_hotkey)
 
-        hint = QLabel("按下快捷键可在任何位置打开消息输入框。如果设置后无效，说明该组合键已被其他程序占用，请换一个。输入文字后按 Enter 发送，按 Esc 关闭。")
+        layout.addWidget(self._field_label("老板键（隐藏/显示弹幕）"))
+        self.input_boss_key = QLineEdit()
+        self.input_boss_key.setPlaceholderText("例如: f10")
+        layout.addWidget(self.input_boss_key)
+
+        hint = QLabel("支持键盘组合（如 f9、ctrl+shift+a）和鼠标侧键（mouse4 / mouse5）。如果设置后无效，说明该按键已被其他程序占用，请换一个。输入文字后按 Enter 发送，按 Esc 关闭。老板键用于一键隐藏/显示弹幕。")
         hint.setWordWrap(True)
         hint.setStyleSheet("color: #8b949e; font-size: 11px; line-height: 1.6;")
         layout.addWidget(hint)
@@ -646,6 +651,7 @@ class SettingsDialog(QDialog):
         self.btn_theme_light.setChecked(theme == "light")
 
         self.input_hotkey.setText(self.config.hotkey or "f9")
+        self.input_boss_key.setText(self.config.boss_key or "f10")
 
     # ── Event Handlers ──────────────────────────────────────────
 
@@ -673,7 +679,8 @@ class SettingsDialog(QDialog):
         QMessageBox.information(self, "保存成功", "显示设置已保存")
 
     def _on_save_hotkey(self):
-        self.config.hotkey = self.input_hotkey.text().strip() or "ctrl+enter"
+        self.config.hotkey = self.input_hotkey.text().strip() or "f9"
+        self.config.boss_key = self.input_boss_key.text().strip() or "f10"
         self._emit_config_save()
         QMessageBox.information(self, "保存成功", "快捷键已保存，下次生效")
 

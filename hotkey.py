@@ -46,6 +46,7 @@ class HotkeyManager(QObject):
         self._current_hotkey: Optional[str] = None
         self._callback: Optional[Callable] = None
         self._keyboard_hook = None
+        self._mouse_hook: Optional[str] = None
         self._hotkey_id: int = 1
         self._lock = threading.Lock()
 
@@ -58,6 +59,10 @@ class HotkeyManager(QObject):
             return False
 
         self._callback = callback
+
+        # Mouse side buttons support
+        if normalized.startswith("mouse"):
+            return self._register_mouse(normalized, callback)
 
         # Primary: keyboard library low-level hook
         try:
@@ -81,6 +86,42 @@ class HotkeyManager(QObject):
 
         # Fallback: Win32 RegisterHotKey + native event filter
         return self._register_win32(normalized, callback)
+
+    def _register_mouse(self, hotkey_str: str, callback: Callable) -> bool:
+        """Register a mouse side button (e.g. mouse4, mouse5)."""
+        try:
+            import mouse
+        except Exception as e:
+            logger.error(f"mouse library not available: {e}")
+            return False
+
+        btn_map = {
+            "mouse4": "x",
+            "mouse5": "x2",
+            "mousex1": "x",
+            "mousex2": "x2",
+        }
+        btn = btn_map.get(hotkey_str)
+        if not btn:
+            logger.error(f"Unsupported mouse button: {hotkey_str}")
+            return False
+
+        def _mouse_callback():
+            logger.info(f"mouse hook triggered: {hotkey_str}")
+            print(f"[danmuFishpi] mouse hook triggered: {hotkey_str}", flush=True)
+            self.triggered.emit()
+
+        try:
+            mouse.on_button(_mouse_callback, buttons=(btn,), types=("down",))
+            self._mouse_hook = hotkey_str
+            self._current_hotkey = hotkey_str
+            logger.info(f"Registered mouse button: {hotkey_str}")
+            print(f"[danmuFishpi] Registered mouse button: {hotkey_str}", flush=True)
+            self.triggered.connect(self._on_triggered)
+            return True
+        except Exception as e:
+            logger.error(f"mouse hook failed for '{hotkey_str}': {e}")
+            return False
 
     def _register_win32(self, hotkey_str: str, callback: Callable) -> bool:
         try:
@@ -118,6 +159,14 @@ class HotkeyManager(QObject):
                 except Exception as e:
                     logger.warning(f"Failed to remove keyboard hook: {e}")
                 self._keyboard_hook = None
+
+            if self._mouse_hook is not None:
+                try:
+                    import mouse
+                    mouse.unhook_all()
+                except Exception as e:
+                    logger.warning(f"Failed to remove mouse hook: {e}")
+                self._mouse_hook = None
 
             if self._current_hotkey and self._hotkey_id:
                 try:
