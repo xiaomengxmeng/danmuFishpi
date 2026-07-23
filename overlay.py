@@ -185,7 +185,7 @@ class DanmuOverlay(QWidget):
         if not getattr(self, "_topmost_timer", None):
             self._topmost_timer = QTimer(self)
             self._topmost_timer.timeout.connect(self._reassert_topmost)
-            self._topmost_timer.start(2000)
+            self._topmost_timer.start(200)
         self._tick()
 
     def stop_render_loop(self) -> None:
@@ -195,7 +195,7 @@ class DanmuOverlay(QWidget):
         if getattr(self, "_topmost_timer", None):
             self._topmost_timer.stop()
 
-    def _reassert_topmost(self) -> None:
+    def _reassert_topmost(self, *, log: bool = False) -> None:
         """Periodically restore HWND_TOPMOST to stay above fullscreen games."""
         if not self.isVisible():
             return
@@ -207,6 +207,8 @@ class DanmuOverlay(QWidget):
         success = reassert_hwnd_topmost(hwnd)
         if success:
             self._topmost_fail_streak = 0
+            if log:
+                logger.info("Overlay HWND_TOPMOST reasserted")
         else:
             self._topmost_fail_streak = getattr(self, "_topmost_fail_streak", 0) + 1
             if self._topmost_fail_streak == 3:
@@ -214,6 +216,40 @@ class DanmuOverlay(QWidget):
                     "topmost reassert failed 3 times; overlay may be blocked "
                     "by exclusive fullscreen or another topmost window"
                 )
+        # Periodically probe for exclusive fullscreen to help diagnostics
+        if not getattr(self, "_last_probe_at", 0) or time.time() - self._last_probe_at > 10:
+            self._probe_fullscreen_risk()
+            self._last_probe_at = time.time()
+
+    def force_topmost(self) -> None:
+        """Manual trigger to force overlay back to topmost (e.g. tray action)."""
+        logger.info("Force overlay topmost")
+        self.show()
+        self.raise_()
+        self.activateWindow()
+        self._reassert_topmost(log=True)
+
+    def _probe_fullscreen_risk(self) -> bool:
+        """Log whether a foreground exclusive-fullscreen window is detected."""
+        try:
+            hwnd = int(self.winId())
+        except (RuntimeError, ValueError, TypeError):
+            return False
+        geom = self.screen().geometry()
+        risk = probe_exclusive_fullscreen_risk(
+            overlay_hwnd=hwnd,
+            screen_x=geom.x(),
+            screen_y=geom.y(),
+            screen_w=geom.width(),
+            screen_h=geom.height(),
+            own_hwnds=(hwnd,),
+        )
+        if risk:
+            logger.warning(
+                "Detected a foreground exclusive-fullscreen window; "
+                "overlay may not be visible. Try borderless/windowed fullscreen."
+            )
+        return risk
 
     def _tick(self) -> None:
         """Animation tick: update positions and request repaint."""

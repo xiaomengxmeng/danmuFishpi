@@ -110,6 +110,7 @@ class App:
             "on_show_input": self.show_input_box,
             "on_toggle_danmu": self.toggle_danmu,
             "on_switch_theme": self.switch_theme,
+            "on_force_topmost": self.force_overlay_topmost,
             "on_quit": self.quit,
         })
         self.tray.set_theme_checked(self.config.theme)
@@ -431,6 +432,13 @@ class App:
     def toggle_danmu(self) -> None:
         """Toggle danmu visibility."""
         self.overlay.toggle_visibility()
+
+    def force_overlay_topmost(self) -> None:
+        """Force overlay back to topmost via tray action."""
+        self.overlay.force_topmost()
+        risk = self.overlay._probe_fullscreen_risk()
+        if not risk:
+            self.notification_manager.show("弹幕鱼排", "已尝试强制置顶弹幕")
 
     def switch_theme(self, theme: str) -> None:
         """Switch theme."""

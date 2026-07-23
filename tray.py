@@ -26,6 +26,7 @@ class Tray:
                 - on_show_input: callable
                 - on_toggle_danmu: callable
                 - on_switch_theme: callable(theme: str)
+                - on_force_topmost: callable
                 - on_quit: callable
         """
         self.callbacks = callbacks
@@ -56,6 +57,11 @@ class Tray:
         # Toggle danmu visibility
         self.act_toggle = menu.addAction("隐藏弹幕")
         self.act_toggle.triggered.connect(self._on_toggle)
+
+        # Force topmost (useful when overlay is hidden by fullscreen game)
+        act_topmost = menu.addAction("强制置顶")
+        act_topmost.triggered.connect(
+            lambda: self.callbacks.get("on_force_topmost", lambda: None)())
 
         menu.addSeparator()
 
