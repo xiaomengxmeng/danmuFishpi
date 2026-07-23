@@ -117,12 +117,16 @@ class App:
             "danmuOpacity": self.config.display.danmu_opacity,
             "fontSize": self.config.display.font_size,
             "fontFamily": self.config.display.font_family,
+            "floatingDwellSeconds": self.config.display.floating_dwell_seconds,
+            "floatingMaxItems": self.config.display.floating_max_items,
+            "floatingCardWidth": self.config.display.floating_card_width,
+            "floatingFontSize": self.config.display.floating_font_size,
         })
 
         self.overlay = DanmuOverlay(self.engine)
         # Set theme and outline config on overlay
         self.overlay.update_config({
-            "danmuMode": "scrolling",
+            "danmuMode": self.config.display.danmu_mode,
             "showAvatar": self.config.display.show_avatar,
             "showNickname": self.config.display.show_nickname,
             "showImage": self.config.display.show_image,
@@ -137,6 +141,10 @@ class App:
             "danmuOpacity": self.config.display.danmu_opacity,
             "fontSize": self.config.display.font_size,
             "fontFamily": self.config.display.font_family,
+            "floatingDwellSeconds": self.config.display.floating_dwell_seconds,
+            "floatingMaxItems": self.config.display.floating_max_items,
+            "floatingCardWidth": self.config.display.floating_card_width,
+            "floatingFontSize": self.config.display.floating_font_size,
         }, self.config.theme)
 
         # Show overlay on the available screen area (excluding taskbar)
@@ -160,10 +168,12 @@ class App:
             "on_show_input": self.show_input_box,
             "on_toggle_danmu": self.toggle_danmu,
             "on_switch_theme": self.switch_theme,
+            "on_switch_mode": self.switch_mode,
             "on_force_topmost": self.force_overlay_topmost,
             "on_quit": self.quit,
         })
         self.tray.set_theme_checked(self.config.theme)
+        self.tray.set_mode_checked(self.config.display.danmu_mode)
 
         # Create input box (created lazily)
         self.input_box = None
@@ -402,8 +412,12 @@ class App:
         def _hotkey_wrapper():
             hk = self.hotkey_mgr._current_hotkey or "未知"
             print(f"[danmuFishpi] 全局热键 {hk} 触发", flush=True)
-            self.notification_manager.show("热键触发", f"{hk} 已触发，正在打开输入框")
-            self.show_input_box()
+            if self.input_box is not None and self.input_box.isVisible():
+                self.hide_input_box()
+                self.notification_manager.show("热键触发", f"{hk} 已触发，已关闭输入框")
+            else:
+                self.show_input_box()
+                self.notification_manager.show("热键触发", f"{hk} 已触发，正在打开输入框")
 
         for hotkey in candidates:
             if self.hotkey_mgr.register(hotkey, _hotkey_wrapper):
@@ -482,6 +496,10 @@ class App:
         self.config.display.font_size = display_config.get("fontSize", self.config.display.font_size)
         self.config.display.font_family = display_config.get("fontFamily", self.config.display.font_family)
         self.config.display.floating_corner = display_config.get("floatingCorner", self.config.display.floating_corner)
+        self.config.display.floating_dwell_seconds = display_config.get("floatingDwellSeconds", self.config.display.floating_dwell_seconds)
+        self.config.display.floating_max_items = display_config.get("floatingMaxItems", self.config.display.floating_max_items)
+        self.config.display.floating_card_width = display_config.get("floatingCardWidth", self.config.display.floating_card_width)
+        self.config.display.floating_font_size = display_config.get("floatingFontSize", self.config.display.floating_font_size)
 
         cfg_module.save(self.config, self.config_path)
 
@@ -523,7 +541,7 @@ class App:
         self.config.theme = theme
         cfg_module.save(self.config, self.config_path)
         self.overlay.update_config({
-            "danmuMode": "scrolling",
+            "danmuMode": self.config.display.danmu_mode,
             "showAvatar": self.config.display.show_avatar,
             "showNickname": self.config.display.show_nickname,
             "showImage": self.config.display.show_image,
@@ -538,10 +556,50 @@ class App:
             "danmuOpacity": self.config.display.danmu_opacity,
             "fontSize": self.config.display.font_size,
             "fontFamily": self.config.display.font_family,
+            "floatingDwellSeconds": self.config.display.floating_dwell_seconds,
+            "floatingMaxItems": self.config.display.floating_max_items,
+            "floatingCardWidth": self.config.display.floating_card_width,
+            "floatingFontSize": self.config.display.floating_font_size,
         }, theme)
         self.overlay.engine.clear_all()
         self.notification_manager.set_theme(theme)
         self.tray.set_theme_checked(theme)
+        if self.settings_dialog:
+            self.settings_dialog.update_config(self.config)
+
+    def switch_mode(self, mode: str) -> None:
+        """Switch danmu display mode from tray."""
+        if mode not in ("scrolling", "floating"):
+            return
+        self.config.display.danmu_mode = mode
+        cfg_module.save(self.config, self.config_path)
+
+        display_config = {
+            "danmuMode": mode,
+            "showAvatar": self.config.display.show_avatar,
+            "showNickname": self.config.display.show_nickname,
+            "showImage": self.config.display.show_image,
+            "showRedPacket": self.config.display.show_red_packet,
+            "showOutline": self.config.display.show_outline,
+            "simpleMode": self.config.display.simple_mode,
+            "topMargin": self.config.display.top_margin,
+            "danmuSpeed": self.config.display.danmu_speed,
+            "danmuArea": self.config.display.danmu_area,
+            "danmuWidth": self.config.display.danmu_width,
+            "danmuHeight": self.config.display.danmu_height,
+            "danmuOpacity": self.config.display.danmu_opacity,
+            "fontSize": self.config.display.font_size,
+            "fontFamily": self.config.display.font_family,
+            "floatingCorner": self.config.display.floating_corner,
+            "floatingDwellSeconds": self.config.display.floating_dwell_seconds,
+            "floatingMaxItems": self.config.display.floating_max_items,
+            "floatingCardWidth": self.config.display.floating_card_width,
+            "floatingFontSize": self.config.display.floating_font_size,
+        }
+        self.overlay.update_config(display_config, self.config.theme)
+        self.overlay.engine.clear_all()
+        self.tray.set_mode_checked(mode)
+        self.notification_manager.show("弹幕鱼排", f"已切换到{'滚动' if mode == 'scrolling' else '浮动'}模式")
         if self.settings_dialog:
             self.settings_dialog.update_config(self.config)
 

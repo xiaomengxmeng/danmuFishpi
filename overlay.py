@@ -295,9 +295,11 @@ class DanmuOverlay(QWidget):
             dt = self._tick_clock.restart() / 1000.0
             self.last_dt = min(dt if dt > 0 else FRAME_DT, DT_CAP)
 
-        # Update scrolling positions
+        # Update positions / cleanup per mode
         if self.engine.mode == "scrolling":
             self.engine.update_scrolling()
+        elif self.engine.mode == "floating":
+            self.engine.cleanup_floating()
 
         # Always trigger repaint when animated content is present
         # so GIF frames advance smoothly.
@@ -383,7 +385,6 @@ class DanmuOverlay(QWidget):
 
         for hard_line in text.split("\n"):
             if not hard_line:
-                raw_lines.append("")
                 continue
             # Measure the number of visual lines Qt thinks this needs.
             br = fm.boundingRect(QRect(0, 0, max_width, 100000), flags, hard_line)
@@ -416,7 +417,8 @@ class DanmuOverlay(QWidget):
         return raw_lines if raw_lines else [""]
 
     def _draw_text_block(self, painter: QPainter, lines: list[str], x: float, y: float,
-                         color: QColor, font_metrics: QFontMetrics | None = None) -> None:
+                         color: QColor, font_metrics: QFontMetrics | None = None,
+                         line_gap: int = 0) -> None:
         """Draw a list of text lines with outline, preserving hard line breaks."""
         fm = font_metrics or self.font_metrics
         line_h = fm.height()
@@ -434,7 +436,7 @@ class DanmuOverlay(QWidget):
             # Draw text
             painter.setPen(pen)
             painter.drawText(int(x), int(cur_y), line)
-            cur_y += line_h
+            cur_y += line_h + line_gap
 
     def _avatar_color(self, nickname: str) -> QColor:
         """Generate a consistent avatar background color from nickname."""
@@ -762,71 +764,80 @@ class DanmuOverlay(QWidget):
             )
 
     def _paint_floating(self, painter: QPainter) -> None:
-        """Paint floating mode cards at the configured corner.
+        """Paint floating-mode cards at the configured corner.
 
-        Supports topLeft, topRight, bottomLeft, bottomRight positions.
-        Newest items are stacked inward from the chosen corner.
+        Supports topLeft, topRight, bottomLeft, bottomRight. Newest items stack
+        inward from the chosen corner. Each card fades out in its final second.
         """
-        card_w = 280
-        card_padding = 10
+        margin = 12
+        card_w = float(self.engine.floating_card_width)
+        card_w = min(card_w, self.width() - margin * 2)
         card_gap = 6
-        max_items = self.engine.max_float
+        fade_window = 1.0  # seconds for fade-out at end of life
 
-        items = self.engine.float_items[-max_items:]
+        items = self.engine.float_items
         if not items:
             return
 
+        now = time.time()
         corner = self.engine.floating_corner
         w = self.width()
         h = self.height()
 
-        # Determine starting position and stacking direction
-        if corner == "topRight":
-            # Stack downward from top-right corner
-            x = w - card_w - card_padding
-            y = card_padding
-            for item in items:
-                card_h = self._draw_card(painter, item, x, y, card_w, 60)
-                y += card_h + card_gap
-        elif corner == "topLeft":
-            # Stack downward from top-left corner
-            x = card_padding
-            y = card_padding
-            for item in items:
-                card_h = self._draw_card(painter, item, x, y, card_w, 60)
-                y += card_h + card_gap
-        elif corner == "bottomRight":
-            # Stack upward from bottom-right corner
-            x = w - card_w - card_padding
-            y = h - card_padding
-            for item in reversed(items):
-                card_h = self._draw_card(painter, item, x, y - 60, card_w, 60)
-                y -= card_h + card_gap
-        else:  # bottomLeft
-            # Stack upward from bottom-left corner
-            x = card_padding
-            y = h - card_padding
-            for item in reversed(items):
-                card_h = self._draw_card(painter, item, x, y - 60, card_w, 60)
-                y -= card_h + card_gap
+        is_top = corner in ("topLeft", "topRight")
+        is_left = corner in ("topLeft", "bottomLeft")
 
-    def _draw_card(self, painter: QPainter, item: DanmuItem,
-                    x: float, y: float, w: float, h: float) -> float:
-        """Draw a floating card (right-side list). Returns actual height used."""
-        padding = 10
-        avatar_size = 28
+        if is_top:
+            y = margin
+            for item in items:
+                x = margin if is_left else w - card_w - margin
+                layout = self._compute_card_layout(item, card_w, self.engine.floating_font_size)
+                self._draw_card_with_fade(painter, item, x, y, card_w, layout, now, fade_window)
+                y += layout["total_h"] + card_gap
+        else:
+            y = h - margin
+            for item in reversed(items):
+                x = margin if is_left else w - card_w - margin
+                layout = self._compute_card_layout(item, card_w, self.engine.floating_font_size)
+                top_y = y - layout["total_h"]
+                self._draw_card_with_fade(painter, item, x, top_y, card_w, layout, now, fade_window)
+                y = top_y - card_gap
+
+    def _draw_card_with_fade(self, painter: QPainter, item: DanmuItem,
+                             x: float, y: float, w: float, layout: dict,
+                             now: float, fade_window: float) -> None:
+        """Draw a floating card, applying fade-out during its final second."""
+        remaining = self.engine.floating_dwell_seconds - (now - item.add_time)
+        card_fade = 1.0
+        if remaining < fade_window:
+            card_fade = max(0.0, remaining / fade_window)
+        if card_fade <= 0.0:
+            return
+        painter.save()
+        painter.setOpacity(painter.opacity() * card_fade)
+        self._draw_card(painter, item, x, y, w, layout)
+        painter.restore()
+
+    def _compute_card_layout(self, item: DanmuItem, w: float,
+                              font_size: int) -> dict:
+        """Measure and compute the floating-card layout.
+
+        Returns a dict with all geometry metrics and fonts so the card can be
+        drawn (and its height measured for stacking) without duplication.
+        """
+        padding = 8
+        avatar_size = max(20, int(font_size * 1.2))
         gap = 8
-        line_gap = 2
-        image_max_h = 80
+        line_gap = 1
+        image_max_h = 60
         image_gap = 6
 
-        # Prepare fonts
         nick_font = QFont(self.font)
-        nick_font.setPointSize(max(8, self.engine.font_size - 6))
+        nick_font.setPointSize(max(8, font_size - 4))
         nick_fm = QFontMetrics(nick_font)
 
         content_font = QFont(self.font)
-        content_font.setPointSize(max(9, self.engine.font_size - 4))
+        content_font.setPointSize(max(8, font_size))
         content_fm = QFontMetrics(content_font)
 
         text, img_urls = self._parse_content(item.content)
@@ -842,12 +853,15 @@ class DanmuOverlay(QWidget):
         text_w = max(40, text_w)
         content_lines = self._wrap_text(text, content_fm, int(text_w), max_lines)
         total_raw = self._wrap_text(text, content_fm, int(text_w))
-        if max_lines is not None and len(total_raw) > max_lines:
+        is_truncated = max_lines is not None and len(total_raw) > max_lines
+        if is_truncated:
             content_lines.append("...")
+
         line_h = content_fm.height()
-        content_h = len(content_lines) * line_h + (len(content_lines) - 1) * 2
+        content_h = len(content_lines) * line_h + (len(content_lines) - 1) * line_gap
 
         nick_h = nick_fm.height() if self.engine.show_nickname and item.nickname else 0
+        total_h = padding * 2 + nick_h + content_h
 
         # Image block height
         image_block_h = 0
@@ -877,7 +891,50 @@ class DanmuOverlay(QWidget):
 
         total_h = max(total_h, avatar_size + padding * 2)
 
-        # Draw card background/border
+        return {
+            "padding": padding,
+            "avatar_size": avatar_size,
+            "gap": gap,
+            "line_gap": line_gap,
+            "image_max_h": image_max_h,
+            "image_gap": image_gap,
+            "nick_font": nick_font,
+            "nick_fm": nick_fm,
+            "content_font": content_font,
+            "content_fm": content_fm,
+            "content_lines": content_lines,
+            "nick_h": nick_h,
+            "image_block_h": image_block_h,
+            "text_w": text_w,
+            "img_urls": img_urls,
+            "show_images": show_images,
+            "have_loaded_images": have_loaded_images,
+            "total_h": total_h,
+        }
+
+    def _draw_card(self, painter: QPainter, item: DanmuItem,
+                   x: float, y: float, w: float, layout: dict) -> None:
+        """Draw a floating card using a precomputed layout dict."""
+        padding = layout["padding"]
+        avatar_size = layout["avatar_size"]
+        gap = layout["gap"]
+        line_gap = layout["line_gap"]
+        image_max_h = layout["image_max_h"]
+        image_gap = layout["image_gap"]
+        nick_font = layout["nick_font"]
+        nick_fm = layout["nick_fm"]
+        content_font = layout["content_font"]
+        content_fm = layout["content_fm"]
+        content_lines = layout["content_lines"]
+        nick_h = layout["nick_h"]
+        image_block_h = layout["image_block_h"]
+        text_w = layout["text_w"]
+        img_urls = layout["img_urls"]
+        show_images = layout["show_images"]
+        have_loaded_images = layout["have_loaded_images"]
+        total_h = layout["total_h"]
+
+        # Card background/border
         painter.setPen(QPen(self.theme["card_border"]))
         painter.setBrush(self.theme["card_bg"])
         painter.drawRoundedRect(QRectF(x, y, w, total_h), 8, 8)
@@ -896,10 +953,13 @@ class DanmuOverlay(QWidget):
             painter.setFont(nick_font)
             painter.drawText(int(cur_x), int(text_y), item.nickname)
 
+        # Content starts at the nickname's left edge so it aligns with the nickname
+        content_x = cur_x
+
         # 2. Draw images (below avatar+nickname line)
         images_top = text_area_top + (nick_fm.height() if self.engine.show_nickname and item.nickname else 0) + line_gap
         if show_images and have_loaded_images:
-            img_x = x + padding
+            img_x = content_x
             img_y = images_top
             row_h = 0
             for url in img_urls[:3]:
@@ -910,8 +970,8 @@ class DanmuOverlay(QWidget):
                     dh = int(cached.height() * scale)
                 else:
                     dw = dh = image_max_h
-                if img_x + dw > x + text_w + padding and img_x > x + padding:
-                    img_x = x + padding
+                if img_x + dw > content_x + text_w and img_x > content_x:
+                    img_x = content_x
                     img_y += row_h + image_gap
                     row_h = 0
                 self._draw_inline_image(painter, img_x, img_y, url, image_max_h)
@@ -923,143 +983,9 @@ class DanmuOverlay(QWidget):
         painter.setPen(QPen(self.theme["text"]))
         painter.setFont(content_font)
         content_color = self.theme["red_packet"] if item.is_red_packet else self.theme["text"]
-        self._draw_text_block(painter, content_lines, x + padding, text_y2, content_color, content_fm)
+        self._draw_text_block(painter, content_lines, content_x, text_y2, content_color, content_fm, line_gap)
 
         painter.setFont(self.font)
-        return total_h
-
-    def _draw_bubble(self, painter: QPainter, item: DanmuItem,
-                      x: float, y: float, w: float, h: float) -> float:
-        """Draw a bottom bubble. Returns actual height used."""
-        padding = 10
-        avatar_size = 24
-        gap = 8
-        image_max_h = 80
-        image_gap = 6
-
-        nick_font = QFont(self.font)
-        nick_font.setPointSize(max(8, self.engine.font_size - 6))
-        nick_fm = QFontMetrics(nick_font)
-
-        content_font = QFont(self.font)
-        content_font.setPointSize(max(9, self.engine.font_size - 4))
-        content_fm = QFontMetrics(content_font)
-
-        text, img_urls = self._parse_content(item.content)
-        show_images = self._effective_show_image() and item.has_image and img_urls
-        if item.has_image and not self._effective_show_image():
-            text = "[图片] " + text
-
-        max_lines = None
-        if self.engine.truncate_long_messages:
-            max_lines = self.engine.max_message_lines
-        text_w = w - padding * 2 - (avatar_size + gap if self._effective_show_avatar() else 0)
-        text_w = max(40, text_w)
-        content_lines = self._wrap_text(text, content_fm, int(text_w), max_lines)
-        total_raw = self._wrap_text(text, content_fm, int(text_w))
-        if max_lines is not None and len(total_raw) > max_lines:
-            content_lines.append("...")
-        line_h = content_fm.height()
-        content_h = len(content_lines) * line_h + (len(content_lines) - 1) * 2
-
-        nick_h = nick_fm.height() if self.engine.show_nickname and item.nickname else 0
-        total_h = padding * 2 + nick_h + 2 + content_h
-
-        # Add image block height
-        image_block_h = 0
-        if show_images:
-            row_x = 0
-            row_h = 0
-            for url in img_urls[:3]:
-                cached = self._image_cache.get(url)
-                if cached and not cached.isNull():
-                    scale = min(image_max_h / cached.height(), image_max_h / cached.width(), 1.0)
-                    dw = int(cached.width() * scale)
-                    dh = int(cached.height() * scale)
-                else:
-                    dw = dh = image_max_h
-                if row_x + dw > text_w and row_x > 0:
-                    image_block_h += row_h + image_gap
-                    row_x = 0
-                    row_h = 0
-                row_x += dw + image_gap
-                row_h = max(row_h, dh)
-            image_block_h += row_h
-            if image_block_h > 0:
-                image_block_h += padding
-            total_h += image_block_h
-
-        total_h = max(total_h, avatar_size + padding * 2)
-
-        painter.setPen(QPen(self.theme["card_border"]))
-        painter.setBrush(self.theme["card_bg"])
-        painter.drawRoundedRect(QRectF(x, y, w, total_h), 12, 12)
-
-        # Vertical top for text area (images drawn above text, web-style)
-        text_area_top = y + padding + image_block_h if (show_images and image_block_h > 0) else y + padding
-
-        # Draw images at top
-        if show_images:
-            img_x = x + padding
-            img_y = y + padding
-            row_h = 0
-            for url in img_urls[:3]:
-                cached = self._image_cache.get(url)
-                if cached and not cached.isNull():
-                    scale = min(image_max_h / cached.height(), image_max_h / cached.width(), 1.0)
-                    dw = int(cached.width() * scale)
-                    dh = int(cached.height() * scale)
-                else:
-                    dw = dh = image_max_h
-                if img_x + dw > x + text_w + padding and img_x > x + padding:
-                    img_x = x + padding
-                    img_y += row_h + image_gap
-                    row_h = 0
-                self._draw_inline_image(painter, img_x, img_y, url, image_max_h)
-                img_x += dw + image_gap
-                row_h = max(row_h, dh)
-
-        text_x = x + padding
-        if self._effective_show_avatar() and item.nickname:
-            self._draw_avatar(painter, text_x, text_area_top,
-                              avatar_size, item.nickname, item.avatar_url)
-            text_x += avatar_size + gap
-
-        text_y = text_area_top + nick_fm.ascent()
-        if self.engine.show_nickname and item.nickname:
-            painter.setPen(QPen(self._nickname_color()))
-            painter.setFont(nick_font)
-            painter.drawText(int(text_x), int(text_y), item.nickname)
-
-        text_y += nick_h + 2
-        painter.setPen(QPen(self.theme["text"]))
-        painter.setFont(content_font)
-        content_color = self.theme["red_packet"] if item.is_red_packet else self.theme["text"]
-        self._draw_text_block(painter, content_lines, text_x, text_y, content_color, content_fm)
-
-        # Draw images below text
-        if show_images:
-            img_x = text_x
-            img_y = text_y + content_h + padding
-            row_h = 0
-            for url in img_urls[:3]:
-                cached = self._image_cache.get(url)
-                if cached and not cached.isNull():
-                    scale = min(image_max_h / cached.height(), image_max_h / cached.width(), 1.0)
-                    dw = int(cached.width() * scale)
-                    dh = int(cached.height() * scale)
-                else:
-                    dw = dh = image_max_h
-                if img_x + dw > text_x + text_w and img_x > text_x:
-                    img_x = text_x
-                    img_y += row_h + image_gap
-                    row_h = 0
-                self._draw_inline_image(painter, img_x, img_y, url, image_max_h)
-                img_x += dw + image_gap
-                row_h = max(row_h, dh)
-
-        painter.setFont(self.font)
-        return total_h
 
     def add_message(self, msg: dict) -> None:
         """Add a new message to the engine and ensure render loop is running."""

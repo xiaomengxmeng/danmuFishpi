@@ -1,9 +1,8 @@
 """Danmu animation engine: track management and position calculation.
 
-Handles three display modes:
+Handles two display modes:
 - scrolling: multi-track horizontal scroll (right to left)
-- floating: right-side card list (max 15, no timeout)
-- bottom: bottom-left bubble list (max 6, 8s timeout)
+- floating: corner card list with per-message dwell timeout + fade-out
 """
 
 import logging
@@ -67,12 +66,16 @@ class DanmuEngine:
         self.opacity: int = 100
         self.top_margin: int = 0
 
+        # Floating mode settings
+        self.floating_dwell_seconds: float = 8.0   # lifetime of each card (s)
+        self.floating_max_items: int = 3           # max simultaneous cards
+        self.floating_card_width: int = 240        # card width (px)
+        self.floating_font_size: int = 16          # card font size (px)
+
         self.tracks: list[Track] = []
         self.scroll_items: list[DanmuItem] = []   # Active scrolling items
-        self.float_items: list[DanmuItem] = []     # Floating/bottom items
-        self.max_float: int = 15
-        self.max_bottom: int = 6
-        self.bottom_timeout: float = 8.0
+        self.float_items: list[DanmuItem] = []     # Floating items
+        self.max_float: int = 30                   # hard cap to bound memory
 
         self.container_width: float = 1920.0
         self.container_height: float = 1080.0
@@ -93,6 +96,13 @@ class DanmuEngine:
         self.max_message_lines = display_config.get("maxMessageLines", self.max_message_lines)
         self.opacity = display_config.get("danmuOpacity", self.opacity)
         self.top_margin = display_config.get("topMargin", self.top_margin)
+
+        self.floating_dwell_seconds = display_config.get("floatingDwellSeconds", self.floating_dwell_seconds)
+        self.floating_max_items = display_config.get("floatingMaxItems", self.floating_max_items)
+        self.floating_card_width = display_config.get("floatingCardWidth", self.floating_card_width)
+        self.floating_font_size = display_config.get("floatingFontSize", self.floating_font_size)
+        self.max_float = max(self.floating_max_items, 8)
+
         self.init_tracks()
 
     def set_container_size(self, w: float, h: float) -> None:
@@ -158,13 +168,10 @@ class DanmuEngine:
 
         logger.info(f"Engine add message from={item.nickname}: {item.content[:40]}")
 
-        if self.mode == "scrolling":
-            return self._add_scrolling(item)
-        elif self.mode == "floating":
+        if self.mode == "floating":
             return self._add_floating(item)
-        elif self.mode == "bottom":
-            return self._add_bottom(item)
-        return None
+        # scrolling (and any unknown mode) falls back to scrolling
+        return self._add_scrolling(item)
 
     def _add_scrolling(self, item: DanmuItem) -> Optional[DanmuItem]:
         """Add item to scrolling mode."""
@@ -187,12 +194,6 @@ class DanmuEngine:
     def _add_floating(self, item: DanmuItem) -> DanmuItem:
         self.float_items.append(item)
         while len(self.float_items) > self.max_float:
-            self.float_items.pop(0)
-        return item
-
-    def _add_bottom(self, item: DanmuItem) -> DanmuItem:
-        self.float_items.append(item)
-        while len(self.float_items) > self.max_bottom:
             self.float_items.pop(0)
         return item
 
@@ -219,18 +220,26 @@ class DanmuEngine:
 
         self.scroll_items = alive
 
-    def cleanup_bottom(self) -> list[DanmuItem]:
-        """Remove timed-out bottom items. Returns list of removed items."""
-        if self.mode != "bottom":
+    def cleanup_floating(self) -> list[DanmuItem]:
+        """Remove timed-out floating items and trim to max_items.
+
+        Returns the list of removed items (useful for debugging/fade hooks).
+        """
+        if self.mode != "floating":
             return []
         now = time.time()
-        removed = []
-        alive = []
+        removed: list[DanmuItem] = []
+        alive: list[DanmuItem] = []
         for item in self.float_items:
-            if now - item.add_time > self.bottom_timeout:
+            if now - item.add_time > self.floating_dwell_seconds:
                 removed.append(item)
             else:
                 alive.append(item)
+        # Keep only the newest max_items (tail of the list)
+        if len(alive) > self.floating_max_items:
+            excess = len(alive) - self.floating_max_items
+            removed.extend(alive[:excess])
+            alive = alive[excess:]
         self.float_items = alive
         return removed
 

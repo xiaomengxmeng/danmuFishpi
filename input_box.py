@@ -114,6 +114,11 @@ class InputBox(QWidget):
     def show_at_bottom(self):
         """Center the input box horizontally near the bottom of the primary screen."""
         screen = QApplication.primaryScreen().availableGeometry()
+        # Compute the real size from the layout *before* positioning. On the
+        # first show the widget has no valid height yet (only width is fixed),
+        # so calling this avoids placing it off-screen where the window manager
+        # would re-center it.
+        self.adjustSize()
         x = screen.x() + (screen.width() - self.width()) // 2
         y = screen.y() + screen.height() - self.height() - 20
         self.move(x, y)

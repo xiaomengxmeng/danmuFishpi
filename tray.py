@@ -78,6 +78,19 @@ class Tray:
             theme_menu.addAction(act)
             self.theme_actions[theme] = act
 
+        # Mode submenu
+        mode_menu = menu.addMenu("模式")
+        self.mode_group = QActionGroup(mode_menu)
+        self.mode_actions = {}
+        for mode, label in [("scrolling", "滚动模式"),
+                            ("floating", "浮动模式")]:
+            act = QAction(label, mode_menu, checkable=True)
+            act.setActionGroup(self.mode_group)
+            act.triggered.connect(
+                lambda checked, m=mode: self._on_switch_mode(m))
+            mode_menu.addAction(act)
+            self.mode_actions[mode] = act
+
         menu.addSeparator()
 
         # Quit
@@ -99,6 +112,14 @@ class Tray:
         """Update the checked state of theme menu items."""
         if theme in self.theme_actions:
             self.theme_actions[theme].setChecked(True)
+
+    def _on_switch_mode(self, mode: str) -> None:
+        self.callbacks.get("on_switch_mode", lambda m: None)(mode)
+
+    def set_mode_checked(self, mode: str) -> None:
+        """Update the checked state of mode menu items."""
+        if mode in self.mode_actions:
+            self.mode_actions[mode].setChecked(True)
 
     def show_message(self, title: str, message: str) -> None:
         """Show a balloon notification from the tray."""

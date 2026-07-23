@@ -11,7 +11,7 @@ from PyQt6.QtGui import QFont, QPainter, QColor, QPen, QBrush
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QWidget, QLabel, QLineEdit,
     QPushButton, QSlider, QCheckBox, QButtonGroup, QComboBox, QMessageBox,
-    QFrame, QSizePolicy, QTextEdit,
+    QFrame, QSizePolicy, QTextEdit, QScrollArea,
 )
 
 from config import Config, dpapi_encrypt, dpapi_decrypt
@@ -219,6 +219,30 @@ class SettingsDialog(QDialog):
             #contentArea {{
                 background: transparent;
             }}
+            QScrollArea#scrollArea {{
+                background: transparent;
+                border: none;
+            }}
+            QScrollBar:vertical {{
+                background: transparent;
+                width: 8px;
+                margin: 0;
+            }}
+            QScrollBar::handle:vertical {{
+                background: {c['border']};
+                border-radius: 4px;
+                min-height: 24px;
+            }}
+            QScrollBar::handle:vertical:hover {{
+                background: {c['text_muted']};
+            }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+                height: 0;
+                background: none;
+            }}
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
+                background: transparent;
+            }}
             QLabel[class="sectionLabel"] {{
                 color: {c['text_secondary']};
                 font-size: 11px;
@@ -393,13 +417,20 @@ class SettingsDialog(QDialog):
             self.tab_buttons[tab_id] = btn
         layout.addWidget(tab_bar)
 
-        # Content Area
+        # Content Area (scrollable)
         self.content_area = QWidget()
         self.content_area.setObjectName("contentArea")
         self.content_layout = QVBoxLayout(self.content_area)
         self.content_layout.setContentsMargins(18, 18, 18, 18)
         self.content_layout.setSpacing(0)
-        layout.addWidget(self.content_area, stretch=1)
+
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setObjectName("scrollArea")
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.scroll_area.setWidget(self.content_area)
+        layout.addWidget(self.scroll_area, stretch=1)
 
         # Build panels
         self._build_account_panel()
@@ -570,31 +601,52 @@ class SettingsDialog(QDialog):
         for btn in (self.btn_mode_scrolling, self.btn_mode_floating):
             btn.clicked.connect(self._on_mode_changed)
 
-        # Corner selector (only relevant for floating mode, hidden initially)
-        layout.addWidget(self._section_label("浮动弹幕位置"))
-        self.corner_widget = QWidget()
-        corner_layout = QHBoxLayout(self.corner_widget)
-        corner_layout.setContentsMargins(0, 0, 0, 0)
-        corner_layout.setSpacing(4)
+        # Scrolling-only settings container
+        self.scrolling_widget = QWidget()
+        scroll_layout = QVBoxLayout(self.scrolling_widget)
+        scroll_layout.setContentsMargins(0, 0, 0, 0)
+        scroll_layout.setSpacing(10)
+        scroll_layout.addWidget(self._section_label("滚动区域"))
+        self.combo_area = QComboBox()
+        self.combo_area.addItems(["全屏", "上半屏", "下半屏"])
+        self.combo_area.setObjectName("combo")
+        scroll_layout.addWidget(self.combo_area)
+        self.combo_area.currentIndexChanged.connect(self._emit_config_save)
+        layout.addWidget(self.scrolling_widget)
+
+        # Floating-only settings container
+        self.floating_widget = QWidget()
+        float_layout = QVBoxLayout(self.floating_widget)
+        float_layout.setContentsMargins(0, 0, 0, 0)
+        float_layout.setSpacing(10)
+
+        float_layout.addWidget(self._section_label("浮动弹幕位置"))
         corner_group = QButtonGroup(self)
         self.btn_corner_tr = self._group_button("右上", "corner", "topRight", corner_group)
         self.btn_corner_tl = self._group_button("左上", "corner", "topLeft", corner_group)
         self.btn_corner_br = self._group_button("右下", "corner", "bottomRight", corner_group)
         self.btn_corner_bl = self._group_button("左下", "corner", "bottomLeft", corner_group)
-        corner_layout.addWidget(self.btn_corner_tr)
-        corner_layout.addWidget(self.btn_corner_tl)
-        corner_layout.addWidget(self.btn_corner_br)
-        corner_layout.addWidget(self.btn_corner_bl)
-        layout.addWidget(self.corner_widget)
-        for btn in (self.btn_corner_tr, self.btn_corner_tl, self.btn_corner_br, self.btn_corner_bl):
-            btn.clicked.connect(self._emit_config_save)
+        corner_row = QHBoxLayout()
+        corner_row.setContentsMargins(0, 0, 0, 0)
+        corner_row.setSpacing(4)
+        for b in (self.btn_corner_tr, self.btn_corner_tl, self.btn_corner_br, self.btn_corner_bl):
+            corner_row.addWidget(b)
+            b.clicked.connect(self._emit_config_save)
+        float_layout.addLayout(corner_row)
 
-        # Area (scrolling only)
-        layout.addWidget(self._section_label("滚动区域"))
-        self.combo_area = QComboBox()
-        self.combo_area.addItems(["全屏", "上半屏", "下半屏"])
-        layout.addWidget(self.combo_area)
-        self.area_widget = self.combo_area  # for show/hide
+        self.slider_dwell = self._make_slider(3, 30, self.config.display.floating_dwell_seconds)
+        float_layout.addLayout(self._slider_row("停留时间", self.slider_dwell, self.config.display.floating_dwell_seconds, "s"))
+        self.slider_max_items = self._make_slider(1, 8, self.config.display.floating_max_items)
+        float_layout.addLayout(self._slider_row("最大条数", self.slider_max_items, self.config.display.floating_max_items, ""))
+        self.slider_card_width = self._make_slider(160, 520, self.config.display.floating_card_width)
+        float_layout.addLayout(self._slider_row("卡片宽度", self.slider_card_width, self.config.display.floating_card_width, "px"))
+        self.slider_card_font = self._make_slider(8, 48, self.config.display.floating_font_size)
+        float_layout.addLayout(self._slider_row("卡片字号", self.slider_card_font, self.config.display.floating_font_size, "px"))
+        self.slider_dwell.valueChanged.connect(self._emit_config_save)
+        self.slider_max_items.valueChanged.connect(self._emit_config_save)
+        self.slider_card_width.valueChanged.connect(self._emit_config_save)
+        self.slider_card_font.valueChanged.connect(self._emit_config_save)
+        layout.addWidget(self.floating_widget)
 
         # Sliders
         layout.addWidget(self._section_label("参数调节"))
@@ -610,7 +662,7 @@ class SettingsDialog(QDialog):
         self.slider_opacity = self._make_slider(30, 100, self.config.display.danmu_opacity)
         layout.addLayout(self._slider_row("不透明度", self.slider_opacity, self.config.display.danmu_opacity, "%"))
 
-        self.slider_font = self._make_slider(12, 48, self.config.display.font_size)
+        self.slider_font = self._make_slider(8, 48, self.config.display.font_size)
         layout.addLayout(self._slider_row("字号", self.slider_font, self.config.display.font_size, "px"))
 
         self.slider_top_margin = self._make_slider(0, 300, self.config.display.top_margin)
@@ -776,6 +828,10 @@ class SettingsDialog(QDialog):
         self.slider_opacity.setValue(self.config.display.danmu_opacity)
         self.slider_font.setValue(self.config.display.font_size)
         self.slider_top_margin.setValue(self.config.display.top_margin)
+        self.slider_dwell.setValue(self.config.display.floating_dwell_seconds)
+        self.slider_max_items.setValue(self.config.display.floating_max_items)
+        self.slider_card_width.setValue(self.config.display.floating_card_width)
+        self.slider_card_font.setValue(self.config.display.floating_font_size)
 
         idx = self.combo_font.findText(self.config.display.font_family)
         if idx >= 0:
@@ -794,8 +850,8 @@ class SettingsDialog(QDialog):
         mode = self.config.display.danmu_mode
         self.btn_mode_scrolling.setChecked(mode == "scrolling")
         self.btn_mode_floating.setChecked(mode == "floating")
-        self.corner_widget.setVisible(mode == "floating")
-        self.area_widget.setVisible(mode == "scrolling")
+        self.floating_widget.setVisible(mode == "floating")
+        self.scrolling_widget.setVisible(mode == "scrolling")
 
         # Corner
         corner = self.config.display.floating_corner
@@ -829,10 +885,10 @@ class SettingsDialog(QDialog):
         self._emit_config_save()
 
     def _on_mode_changed(self):
-        """Show/hide corner and area widgets based on selected mode."""
+        """Show/hide floating/scrolling widgets based on selected mode."""
         is_floating = self.btn_mode_floating.isChecked()
-        self.corner_widget.setVisible(is_floating)
-        self.area_widget.setVisible(not is_floating)
+        self.floating_widget.setVisible(is_floating)
+        self.scrolling_widget.setVisible(not is_floating)
         self._emit_config_save()
 
     def _on_save_display(self):
@@ -918,6 +974,10 @@ class SettingsDialog(QDialog):
             "simpleMode": self.chk_simple_mode.isChecked(),
             "truncateLongMessages": self.chk_truncate.isChecked(),
             "maxMessageLines": 3,
+            "floatingDwellSeconds": self.slider_dwell.value(),
+            "floatingMaxItems": self.slider_max_items.value(),
+            "floatingCardWidth": self.slider_card_width.value(),
+            "floatingFontSize": self.slider_card_font.value(),
             "topMargin": self.slider_top_margin.value(),
             "notifyStartup": self.chk_notify_startup.isChecked(),
             "notifyLogin": self.chk_notify_login.isChecked(),

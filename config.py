@@ -82,20 +82,25 @@ class Display:
     play_sound: bool = False           # deprecated, kept for compatibility
     show_outline: bool = True          # text outline on danmu
     simple_mode: bool = False          # minimal visual style
-    top_margin: int = 0                # 0-300 px
+    top_margin: int = 21               # 0-300 px
     notify_startup: bool = True
     notify_login: bool = True
     notify_follow: bool = True
-    danmu_speed: int = 5               # 1-10
-    danmu_area: str = "fullscreen"     # fullscreen | topHalf | bottomHalf (scrolling only)
-    floating_corner: str = "topRight"  # topLeft | topRight | bottomLeft | bottomRight
-    danmu_width: int = 100             # 30-100 percentage
-    danmu_height: int = 100            # 30-100 percentage
+    danmu_speed: int = 10              # 1-10
+    danmu_area: str = "topHalf"        # fullscreen | topHalf | bottomHalf (scrolling only)
+    floating_corner: str = "bottomLeft"  # topLeft | topRight | bottomLeft | bottomRight
+    danmu_width: int = 52              # 30-100 percentage
+    danmu_height: int = 40             # 30-100 percentage
     danmu_opacity: int = 100           # 30-100 percentage
-    font_size: int = 24                # 12-48 px
-    font_family: str = "Microsoft YaHei"  # font family name
+    font_size: int = 10                # 8-48 px
+    font_family: str = "Consolas"      # font family name
     truncate_long_messages: bool = True  # truncate code blocks / long messages
     max_message_lines: int = 3           # max text lines before truncation
+    # Floating mode specific settings
+    floating_dwell_seconds: int = 8      # 3-30 s, how long each floating card stays
+    floating_max_items: int = 6          # 1-8, max simultaneous floating cards
+    floating_card_width: int = 225       # 160-520 px, floating card width
+    floating_font_size: int = 10         # 8-48 px, floating card font size
 
 
 @dataclass
@@ -104,7 +109,7 @@ class Config:
     display: Display = field(default_factory=Display)
     hotkey: str = "f9"
     boss_key: str = "f10"
-    theme: str = "dark"                # dark | light
+    theme: str = "light"               # dark | light
 
 
 # ── JSON (de)serialisation with camelCase keys ───────────────────
@@ -149,6 +154,10 @@ def config_to_dict(cfg: Config) -> dict:
         "fontFamily": disp["font_family"],
         "truncateLongMessages": disp["truncate_long_messages"],
         "maxMessageLines": disp["max_message_lines"],
+        "floatingDwellSeconds": disp["floating_dwell_seconds"],
+        "floatingMaxItems": disp["floating_max_items"],
+        "floatingCardWidth": disp["floating_card_width"],
+        "floatingFontSize": disp["floating_font_size"],
     }
     # Rename root fields
     d["hotkey"] = d.pop("hotkey", "f9")
@@ -165,8 +174,11 @@ def config_from_dict(d: dict) -> Config:
         password_enc=acc.get("passwordEnc", ""),
     )
     disp = d.get("display", {})
+    danmu_mode_raw = disp.get("danmuMode", "scrolling")
+    if danmu_mode_raw not in ("scrolling", "floating"):
+        danmu_mode_raw = "scrolling"  # fallback for legacy "bottom" mode
     cfg.display = Display(
-        danmu_mode=disp.get("danmuMode", "scrolling"),
+        danmu_mode=danmu_mode_raw,
         show_avatar=disp.get("showAvatar", True),
         show_nickname=disp.get("showNickname", True),
         show_image=disp.get("showImage", True),
@@ -176,24 +188,28 @@ def config_from_dict(d: dict) -> Config:
         play_sound=disp.get("playSound", False),
         show_outline=disp.get("showOutline", True),
         simple_mode=disp.get("simpleMode", False),
-        top_margin=disp.get("topMargin", 0),
+        top_margin=disp.get("topMargin", 21),
         notify_startup=disp.get("notifyStartup", True),
         notify_login=disp.get("notifyLogin", True),
         notify_follow=disp.get("notifyFollow", True),
-        danmu_speed=disp.get("danmuSpeed", 5),
-        danmu_area=disp.get("danmuArea", "fullscreen"),
-        floating_corner=disp.get("floatingCorner", "topRight"),
-        danmu_width=disp.get("danmuWidth", 100),
-        danmu_height=disp.get("danmuHeight", 100),
+        danmu_speed=disp.get("danmuSpeed", 10),
+        danmu_area=disp.get("danmuArea", "topHalf"),
+        floating_corner=disp.get("floatingCorner", "bottomLeft"),
+        danmu_width=disp.get("danmuWidth", 52),
+        danmu_height=disp.get("danmuHeight", 40),
         danmu_opacity=disp.get("danmuOpacity", 100),
-        font_size=disp.get("fontSize", 24),
-        font_family=disp.get("fontFamily", "Microsoft YaHei"),
+        font_size=disp.get("fontSize", 10),
+        font_family=disp.get("fontFamily", "Consolas"),
         truncate_long_messages=disp.get("truncateLongMessages", True),
         max_message_lines=disp.get("maxMessageLines", 3),
+        floating_dwell_seconds=disp.get("floatingDwellSeconds", 8),
+        floating_max_items=disp.get("floatingMaxItems", 6),
+        floating_card_width=disp.get("floatingCardWidth", 225),
+        floating_font_size=disp.get("floatingFontSize", 10),
     )
     cfg.hotkey = d.get("hotkey", "f9")
     cfg.boss_key = d.get("bossKey", "f10")
-    cfg.theme = d.get("theme", "dark")
+    cfg.theme = d.get("theme", "light")
     return cfg
 
 
