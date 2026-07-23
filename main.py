@@ -117,6 +117,9 @@ class App:
         # Create input box (created lazily)
         self.input_box = None
 
+        # Settings dialog (created lazily)
+        self.settings_dialog = None
+
         # Create hotkey manager
         self.hotkey_mgr = HotkeyManager()
         self.hotkey_mgr.install_filter()
@@ -128,9 +131,6 @@ class App:
                 "热键已就绪",
                 f"按 {active_hotkey} 打开输入框\n也可右键托盘 → 发送消息",
             )
-
-        # Settings dialog (created lazily)
-        self.settings_dialog = None
 
         # Show overlay and start render loop
         self.overlay.show()
