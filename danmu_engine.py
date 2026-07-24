@@ -40,7 +40,6 @@ class DanmuItem:
 class Track:
     """A horizontal lane for scrolling danmu."""
     y: float = 0.0
-    last_item_time: float = 0.0
 
 
 class DanmuEngine:
@@ -56,6 +55,8 @@ class DanmuEngine:
         self.font_family: str = "Microsoft YaHei"
         self.danmu_speed: int = 5
         self.danmu_area: str = "fullscreen"
+        self.danmu_width: int = 100
+        self.danmu_height: int = 100
         self.floating_corner: str = "topRight"
         self.show_avatar: bool = True
         self.show_nickname: bool = True
@@ -77,8 +78,20 @@ class DanmuEngine:
         self.float_items: list[DanmuItem] = []     # Floating items
         self.max_float: int = 30                   # hard cap to bound memory
 
+        self.overlay = None  # set by overlay; used to estimate item height
+
         self.container_width: float = 1920.0
         self.container_height: float = 1080.0
+
+        # Scrolling playfield (computed from width/height/area/top-margin %)
+        self.playfield_left: float = 0.0
+        self.playfield_top: float = 0.0
+        self.playfield_width: float = 1920.0
+        self.playfield_height: float = 1080.0
+
+    def set_overlay(self, overlay) -> None:
+        """Wire the overlay so the engine can query item-height estimates."""
+        self.overlay = overlay
 
     def update_config(self, display_config: dict) -> None:
         """Update engine settings from a display config dict."""
@@ -87,6 +100,8 @@ class DanmuEngine:
         self.font_family = display_config.get("fontFamily", self.font_family)
         self.danmu_speed = display_config.get("danmuSpeed", self.danmu_speed)
         self.danmu_area = display_config.get("danmuArea", self.danmu_area)
+        self.danmu_width = display_config.get("danmuWidth", self.danmu_width)
+        self.danmu_height = display_config.get("danmuHeight", self.danmu_height)
         self.floating_corner = display_config.get("floatingCorner", self.floating_corner)
         self.show_avatar = display_config.get("showAvatar", self.show_avatar)
         self.show_nickname = display_config.get("showNickname", self.show_nickname)
@@ -110,50 +125,128 @@ class DanmuEngine:
         self.container_height = h
         self.init_tracks()
 
+    # Area presets: (base_top_ratio, base_height_ratio) of the full container.
+    _AREA_PRESETS = {
+        "fullscreen": (0.0, 1.0),
+        "top25":      (0.0, 0.25),
+        "topHalf":    (0.0, 0.5),
+        "bottomHalf": (0.5, 0.5),
+        "bottom25":   (0.75, 0.25),
+    }
+
+    def _compute_playfield(self) -> None:
+        """Recompute the scrolling playfield rectangle (container pixels).
+
+        The playfield is the sub-region of the container in which scrolling
+        danmu live. It is derived from:
+          - danmu_area  : coarse vertical band (full / 25% / 50% top or bottom)
+          - danmu_width : playfield width as % of container width (centered)
+          - danmu_height: playfield height as % of the area band height
+          - top_margin  : extra downward offset as % of container height
+        """
+        C_W = self.container_width
+        C_H = self.container_height
+        base_top_r, base_h_r = self._AREA_PRESETS.get(self.danmu_area, (0.0, 1.0))
+
+        width_pct = max(1.0, min(100.0, self.danmu_width)) / 100.0
+        height_pct = max(1.0, min(100.0, self.danmu_height)) / 100.0
+        top_pct = max(0.0, min(100.0, self.top_margin)) / 100.0
+
+        band_top = C_H * base_top_r
+        band_h = C_H * base_h_r
+
+        # Top margin is a % of the *band* height, so it only nudges the
+        # playfield within the area band and can never push it off-screen.
+        pf_height = band_h * height_pct
+        pf_top = band_top + band_h * top_pct
+        pf_width = C_W * width_pct
+        pf_left = (C_W - pf_width) / 2.0
+
+        # Keep the playfield within the container bounds and guarantee a
+        # minimally usable height so danmu never disappear entirely.
+        min_height = max(8.0, self.font_size * 1.6)
+        if pf_height < min_height:
+            pf_height = min_height
+        if pf_top + pf_height > C_H:
+            pf_top = max(0.0, C_H - pf_height)
+        pf_width = max(1.0, min(pf_width, C_W))
+        pf_left = (C_W - pf_width) / 2.0
+
+        self.playfield_left = pf_left
+        self.playfield_top = pf_top
+        self.playfield_width = pf_width
+        self.playfield_height = pf_height
+
     def init_tracks(self) -> None:
-        """Initialize scrolling tracks based on font size and area."""
+        """Initialize scrolling tracks based on font size and playfield."""
+        self._compute_playfield()
         line_height = self.font_size * 1.6
-        available_height = self.container_height
-        start_offset = float(self.top_margin)
-
-        if self.danmu_area == "topHalf":
-            available_height = self.container_height / 2
-            start_offset = float(self.top_margin)
-        elif self.danmu_area == "bottomHalf":
-            available_height = self.container_height / 2
-            start_offset = self.container_height / 2 + float(self.top_margin)
-
-        track_count = max(5, min(int(available_height / line_height), 20))
+        available_height = self.playfield_height
+        track_count = max(1, min(int(available_height / line_height), 40))
 
         self.tracks = []
         for i in range(track_count):
-            self.tracks.append(Track(
-                y=start_offset + i * line_height,
-                last_item_time=0.0,
-            ))
+            self.tracks.append(Track(y=self.playfield_top + i * line_height))
 
-    def find_free_track(self) -> int:
-        """Find a free track for a new scrolling item.
+    def _estimate_size(self, item: DanmuItem) -> tuple[float, float]:
+        """Estimate a scrolling item's (width, height) before it is measured.
 
-        Priority: track unused for >3s, else least-recently-used.
-        Returns -1 if no tracks exist.
+        Uses the overlay's measurement (mirrors the real pixmap size) when
+        available; otherwise falls back to a single-line size.
         """
-        if not self.tracks:
-            return -1
+        if self.overlay is not None:
+            try:
+                return self.overlay.estimate_scrolling_size(item)
+            except Exception:
+                logger.debug("size estimate failed; using fallback", exc_info=True)
+        return float(self.playfield_width * 0.5), self.font_size * 1.6
 
-        now = time.time()
-        best_track = -1
-        best_time = 0.0
+    def _overlaps(self, rx: float, ry: float, rw: float, rh: float) -> bool:
+        """Return True if rect (rx,ry,rw,rh) overlaps any active scrolling item.
 
-        for i, track in enumerate(self.tracks):
-            elapsed = now - track.last_item_time
-            if elapsed > 3.0:
-                return i
-            if elapsed > best_time:
-                best_time = elapsed
-                best_track = i
+        Unmeasured items (width/height <= 0) are treated as occupying the full
+        container, so they correctly block placement instead of being skipped.
+        """
+        for it in self.scroll_items:
+            iw = it.width if it.width > 0 else self.container_width
+            ih = it.height if it.height > 0 else self.font_size * 1.6
+            if (rx < it.x + iw and rx + rw > it.x
+                    and ry < it.y + ih and ry + rh > it.y):
+                return True
+        return False
 
-        return best_track
+    def find_free_y(self, item: DanmuItem) -> float:
+        """Find a Y for a new scrolling item with zero 2D overlap.
+
+        All scrolling items move left at the same speed, so their relative
+        horizontal positions are constant for all time. A new item therefore
+        only ever overlaps an existing one if they overlap at the moment it is
+        placed (entering at the right edge). We scan Y top-down and pick the
+        first band whose entry rect does not intersect any existing item. This
+        guarantees no overlap regardless of how tall/multi-line the item is.
+
+        Falls back to the topmost track if the screen is too crowded to fit.
+        """
+        est_w, est_h = self._estimate_size(item)
+        gap = max(6.0, self.font_size * 0.3)
+        step = max(8.0, self.font_size * 0.6)
+
+        # Entry rect: item enters at the right edge of the playfield and
+        # extends left by est_w. Inflate by `gap` for breathing room.
+        playfield_right = self.playfield_left + self.playfield_width
+        entry_left = playfield_right - (est_w + gap)
+        bottom_limit = self.playfield_top + self.playfield_height
+
+        y = float(self.playfield_top)
+        while y + est_h <= bottom_limit:
+            if not self._overlaps(entry_left, y - gap / 2, est_w + gap, est_h + gap):
+                return y
+            y += step
+
+        # Screen too crowded: drop onto the topmost track so it still shows.
+        if self.tracks:
+            return min(self.tracks, key=lambda t: t.y).y
+        return float(self.playfield_top)
 
     def add_message(self, msg: dict) -> Optional[DanmuItem]:
         """Add a new message to the engine. Returns the created item or None."""
@@ -175,19 +268,15 @@ class DanmuEngine:
 
     def _add_scrolling(self, item: DanmuItem) -> Optional[DanmuItem]:
         """Add item to scrolling mode."""
-        track_idx = self.find_free_track()
-        if track_idx < 0:
-            return None
-
-        item.track_index = track_idx
-        item.y = self.tracks[track_idx].y
+        y = self.find_free_y(item)
+        item.track_index = int(y)
+        item.y = y
         item.start_time = time.time()
-        # Duration formula: 20 - (speed - 1) * 1.5
-        item.duration = 20.0 - (self.danmu_speed - 1) * 1.5
-        # Start position: right edge of container (x set by overlay after measuring width)
-        item.x = self.container_width
+        # Duration: speed 0-100 (higher = faster). Maps ~25s (slow) .. 4s (fast).
+        item.duration = max(4.0, 25.0 - (self.danmu_speed / 100.0) * 21.0)
+        # Start position: right edge of the playfield.
+        item.x = self.playfield_left + self.playfield_width
 
-        self.tracks[track_idx].last_item_time = time.time()
         self.scroll_items.append(item)
         return item
 
@@ -203,18 +292,23 @@ class DanmuEngine:
         alive = []
         for item in self.scroll_items:
             if item.width <= 0:
-                # Width not yet measured; keep alive
+                # Pixmap not measured yet (e.g. image still loading). Hold the
+                # start time so that once width becomes available the item
+                # enters smoothly from the right edge instead of jumping in
+                # mid-screen (which looked like a "late render").
+                item.start_time = now
                 alive.append(item)
                 continue
 
             elapsed = now - item.start_time
             progress = elapsed / item.duration
-            # Move from container_width to -item.width
-            total_distance = self.container_width + item.width
-            item.x = self.container_width - progress * total_distance
+            # Move across the playfield from its right edge to its left edge.
+            total_distance = self.playfield_width + item.width
+            playfield_right = self.playfield_left + self.playfield_width
+            item.x = playfield_right - progress * total_distance
 
-            if item.x + item.width < 0:
-                # Off-screen left, remove
+            if item.x + item.width < self.playfield_left:
+                # Off-screen left of the playfield, remove
                 continue
             alive.append(item)
 
@@ -247,8 +341,6 @@ class DanmuEngine:
         """Clear all items."""
         self.scroll_items.clear()
         self.float_items.clear()
-        for track in self.tracks:
-            track.last_item_time = 0.0
 
     def has_content(self) -> bool:
         """Check if there are any items to render."""

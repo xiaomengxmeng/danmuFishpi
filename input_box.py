@@ -6,6 +6,7 @@ interfere with the danmu overlay behind it.
 
 import logging
 
+import config as cfg_module
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QPainter
 from PyQt6.QtWidgets import (
@@ -112,8 +113,8 @@ class InputBox(QWidget):
         self._apply_theme()
 
     def show_at_bottom(self):
-        """Center the input box horizontally near the bottom of the primary screen."""
-        screen = QApplication.primaryScreen().availableGeometry()
+        """Center the input box horizontally near the bottom of the configured screen."""
+        screen = cfg_module.target_screen_geometry(QApplication.instance())
         # Compute the real size from the layout *before* positioning. On the
         # first show the widget has no valid height yet (only width is fixed),
         # so calling this avoids placing it off-screen where the window manager

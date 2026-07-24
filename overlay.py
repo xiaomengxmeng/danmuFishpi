@@ -12,6 +12,7 @@ import ctypes
 import logging
 import sys
 import time
+from typing import Optional
 
 from PyQt6.QtCore import Qt, QTimer, QRect, QRectF, QPointF, QElapsedTimer
 from PyQt6.QtGui import (
@@ -65,6 +66,7 @@ class DanmuOverlay(QWidget):
         super().__init__()
 
         self.engine = engine
+        engine.set_overlay(self)  # let the engine query item-size estimates
 
         # Window flags: frameless, always-on-top, tool window (no taskbar),
         # bypass window manager to reduce focus stealing
@@ -83,9 +85,26 @@ class DanmuOverlay(QWidget):
         self.setStyleSheet("background: transparent;")
 
         # Font setup
-        self.font = QFont("Microsoft YaHei", engine.font_size)
+        # setPixelSize makes the font size DPI-independent: the same number of
+        # physical pixels on every screen. This guarantees QFontMetrics height
+        # matches the actual rendered text height inside QPixmap, preventing
+        # clipping on mixed-DPI multi-monitor setups (e.g. 125% + 100%).
+        self.font = QFont("Microsoft YaHei")
+        self.font.setPixelSize(engine.font_size)
         self.font.setBold(True)
-        self.font_metrics = QFontMetrics(self.font)
+        self.font_metrics = QFontMetrics(self.font, self)
+        try:
+            self._metrics_screen = self.screen()
+        except (RuntimeError, AttributeError):
+            self._metrics_screen = None
+
+        # Rebuild metrics + clear pixmap cache when moving to a screen with a
+        # different DPI (e.g. dragging the overlay or switching display_screen).
+        # QWidget.screenChanged is not exposed in PyQt6, so we attach to the
+        # underlying QWindow.screenChanged lazily in showEvent (the QWindow is
+        # only available after the widget is shown).
+        self._win_screen_signal_attached = False
+        self._metrics_screen = None  # screen QFontMetrics was built for
 
         # Theme
         self.theme = THEME_DARK
@@ -135,14 +154,48 @@ class DanmuOverlay(QWidget):
         """Update overlay settings from config."""
         self.engine.update_config(display_config)
         font_family = display_config.get("fontFamily", "Microsoft YaHei") or "Microsoft YaHei"
-        self.font = QFont(font_family, self.engine.font_size)
+        self.font = QFont(font_family)
+        self.font.setPixelSize(self.engine.font_size)
         self.font.setBold(True)
-        self.font_metrics = QFontMetrics(self.font)
+        self.font_metrics = QFontMetrics(self.font, self)
+        try:
+            self._metrics_screen = self.screen()
+        except (RuntimeError, AttributeError):
+            self._metrics_screen = None
         self.theme = THEME_LIGHT if theme == "light" else THEME_DARK
         self.show_outline = display_config.get("showOutline", True)
         # Clear pixmap cache (font/size changed)
         self._pixmaps.clear()
         self._has_animated_content = False
+        self.update()
+
+    def _on_screen_changed(self, _screen) -> None:
+        """Rebuild font metrics and clear pixmap cache when the overlay's screen changes.
+
+        Different screens may have different logical DPI. QFontMetrics bound to
+        ``self`` uses the overlay's current screen DPI, so it must be rebuilt on
+        move; otherwise cached pixmaps sized with the old screen's metrics clip
+        the text rendered at the new screen's DPI.
+        """
+        self._rebuild_metrics_for_current_screen(force=True)
+
+    def _rebuild_metrics_for_current_screen(self, *, force: bool = False) -> None:
+        """Rebuild QFontMetrics if the overlay is now on a different screen.
+
+        With ``force=True`` (e.g. the QWindow.screenChanged signal fired) the
+        rebuild + pixmap cache clear always happens. Otherwise the rebuild is
+        skipped when the screen has not changed, avoiding needless cache churn
+        on repeated showEvent calls.
+        """
+        try:
+            current = self.screen()
+        except (RuntimeError, AttributeError):
+            current = None
+        if not force and current is not None and current is self._metrics_screen:
+            return
+        self.font_metrics = QFontMetrics(self.font, self)
+        self._metrics_screen = current
+        self._pixmaps.clear()
         self.update()
 
     def set_click_through(self, enable: bool) -> None:
@@ -178,6 +231,32 @@ class DanmuOverlay(QWidget):
         """Apply Win32 click-through after window is shown (HWND available)."""
         super().showEvent(event)
         self._apply_win32_exstyles(_defer_attempt=0)
+        self._attach_window_screen_signal()
+        # By show() time the widget has reached its target screen (setGeometry
+        # runs before show() in the init path). Rebuild metrics for that screen
+        # in case it differs from the primary screen the metrics were built on.
+        self._rebuild_metrics_for_current_screen()
+
+    def _attach_window_screen_signal(self) -> None:
+        """Connect to QWindow.screenChanged once the QWindow exists.
+
+        QWidget.screenChanged is not exposed in PyQt6, so we reach the
+        underlying QWindow (available only after show()) and connect there.
+        This fires when the overlay moves to a screen with a different DPI.
+        """
+        if self._win_screen_signal_attached:
+            return
+        try:
+            wh = self.windowHandle()
+        except (RuntimeError, AttributeError):
+            return
+        if wh is None:
+            return
+        try:
+            wh.screenChanged.connect(self._on_screen_changed)
+            self._win_screen_signal_attached = True
+        except (AttributeError, TypeError) as e:
+            logger.debug(f"Could not attach QWindow.screenChanged: {e}")
 
     def _apply_win32_exstyles(self, *, _defer_attempt: int = 0) -> None:
         """Apply WS_EX_LAYERED + WS_EX_TRANSPARENT; retry if HWND not ready."""
@@ -350,7 +429,7 @@ class DanmuOverlay(QWidget):
         if item.has_image and not self._effective_show_image():
             content = "[图片] " + content
 
-        max_width = int(self.engine.container_width * 0.6)
+        max_width = int(self.engine.playfield_width * 0.6)
         prefix_w = w
         available_text_w = max(100, max_width - prefix_w)
         text_lines = self._wrap_text(content, self.font_metrics, available_text_w)
@@ -481,10 +560,10 @@ class DanmuOverlay(QWidget):
 
             letter = nickname[0].upper() if nickname else "?"
             font = QFont(self.font)
-            font.setPointSize(int(size * 0.5))
+            font.setPixelSize(int(size * 0.5))
             painter.setFont(font)
             painter.setPen(QPen(QColor(255, 255, 255)))
-            fm = QFontMetrics(font)
+            fm = QFontMetrics(font, self)
             tw = fm.horizontalAdvance(letter)
             th = fm.ascent()
             painter.drawText(
@@ -566,6 +645,75 @@ class DanmuOverlay(QWidget):
         painter.drawRoundedRect(QRectF(x, y, dst_w, dst_h), 6, 6)
         return dst_w, dst_h
 
+    def estimate_scrolling_size(self, item: DanmuItem) -> tuple[float, float]:
+        """Estimate (width, height) of a scrolling item's rendered pixmap.
+
+        Mirrors the layout math in _get_item_pixmap (without actually drawing)
+        so the engine can place the item without vertical overlap before the
+        pixmap is measured. Returns (width, height) in CSS pixels.
+        """
+        max_width = int(self.engine.playfield_width * 0.6)
+        avatar_size = int(self.engine.font_size * 1.4)
+        padding = 12
+        line_gap = 4
+        image_max_h = 80
+        image_gap = 6
+
+        text, img_urls = self._parse_content(item.content)
+        show_images = self._effective_show_image() and item.has_image and img_urls
+        if item.has_image and not self._effective_show_image():
+            text = "[图片] " + text
+
+        # Prefix size (avatar + nickname) - one line
+        prefix_w = 0
+        if self._effective_show_avatar() and item.nickname:
+            prefix_w += avatar_size + 8
+        nick_text = ""
+        if self.engine.show_nickname and item.nickname:
+            nick_text = item.nickname + ": "
+            prefix_w += self.font_metrics.horizontalAdvance(nick_text) + 8
+
+        # Text layout — truncate if setting enabled
+        max_lines = None
+        if self.engine.truncate_long_messages:
+            max_lines = self.engine.max_message_lines
+        available_text_w = max(100, max_width - padding * 2)
+        text_lines = self._wrap_text(text, self.font_metrics, available_text_w, max_lines)
+        total_raw_lines = self._wrap_text(text, self.font_metrics, available_text_w)
+        is_truncated = max_lines is not None and len(total_raw_lines) > max_lines
+        if is_truncated:
+            text_lines.append("...")
+        line_h = self.font_metrics.height()
+        prefix_line_h = line_h + 5  # one line for avatar + nickname
+        text_content_h = len(text_lines) * line_h + (len(text_lines) - 1) * line_gap
+
+        longest_line_w = max(
+            (self.font_metrics.horizontalAdvance(line) for line in text_lines),
+            default=0,
+        )
+        content_width = max(1, prefix_w + longest_line_w + padding * 2)
+        content_width = min(content_width, max_width)
+
+        # Image block height (placeholder sizes; matches _get_item_pixmap)
+        image_block_h = 0
+        if show_images:
+            row_x = 0
+            row_h = 0
+            for _url in img_urls[:3]:
+                dw = dh = image_max_h
+                if row_x + dw > content_width - padding * 2 and row_x > 0:
+                    image_block_h += row_h + image_gap
+                    row_x = 0
+                    row_h = 0
+                row_x += dw + image_gap
+                row_h = max(row_h, dh)
+            image_block_h += row_h
+            if image_block_h > 0:
+                image_block_h += padding  # gap between images and text
+
+        height = prefix_line_h + image_block_h + text_content_h
+        return float(content_width), float(height)
+
     def _get_item_pixmap(self, item: DanmuItem) -> QPixmap:
         """Get or create a pre-rendered pixmap for a scrolling item.
 
@@ -589,7 +737,7 @@ class DanmuOverlay(QWidget):
             if item_id in self._pixmaps:
                 return self._pixmaps[item_id]
 
-        max_width = int(self.engine.container_width * 0.6)
+        max_width = int(self.engine.playfield_width * 0.6)
         avatar_size = int(self.engine.font_size * 1.4)
         padding = 12
         line_gap = 4
@@ -756,18 +904,60 @@ class DanmuOverlay(QWidget):
             pm = self._get_item_pixmap(item)
             if pm.isNull():
                 continue
-            dpr = pm.devicePixelRatio()
-            painter.drawPixmap(
-                QPointF(item.x, item.y),
-                pm,
-                QRectF(0, 0, pm.width() / dpr, pm.height() / dpr),
-            )
+            # drawPixmap(QPointF, QPixmap) draws the ENTIRE pixmap at the target
+            # point, letting Qt handle devicePixelRatio correctly. The previous
+            # 3-arg form used QRectF(0,0, w/dpr, h/dpr) as the source rect, but
+            # Qt6 expects source rects in device pixels (physical), not logical
+            # pixels — so on DPR>1 screens the source rect was too small and the
+            # bottom of multi-line text was clipped.
+            painter.drawPixmap(QPointF(item.x, item.y), pm)
+
+    def _find_free_y(self, occupied: list[tuple[float, float]], candidate_top: float,
+                     card_h: float, h: float, *, from_top: bool, margin: float) -> Optional[float]:
+        """Find a top-y at/near candidate_top that avoids overlap with placed
+        cards and stays within the screen.
+
+        Returns the adjusted top y, or None if the card cannot fit.
+        """
+        top = candidate_top
+        bottom = top + card_h
+        gap = 6  # breathing room between stacked cards
+
+        # Keep within screen bounds; if it doesn't fit there is no room.
+        if top < margin or bottom > h - margin:
+            return None
+
+        # Nudge away from any overlap, then re-validate against ALL intervals.
+        # Re-scanning after each nudge guarantees no cross-card collision is
+        # missed (the previous single-pass version could leave residual overlap
+        # when a tall card was shifted into another card's band).
+        changed = True
+        while changed:
+            changed = False
+            for (y0, y1) in occupied:
+                if bottom <= y0 or top >= y1:
+                    continue
+                if from_top:
+                    top = y1 + gap
+                    bottom = top + card_h
+                else:
+                    bottom = y0 - gap
+                    top = bottom - card_h
+                if top < margin or top + card_h > h - margin:
+                    return None
+                changed = True
+                break  # geometry changed; restart the scan
+
+        return top
 
     def _paint_floating(self, painter: QPainter) -> None:
         """Paint floating-mode cards at the configured corner.
 
-        Supports topLeft, topRight, bottomLeft, bottomRight. Newest items stack
-        inward from the chosen corner. Each card fades out in its final second.
+        Newest items are anchored nearest the corner so they are always visible;
+        older items stack outward. A collision check guarantees cards never
+        overlap, and once the screen is full the remaining (oldest) items are
+        dropped rather than stacked off-screen. Each card fades out in its final
+        second.
         """
         margin = 12
         card_w = float(self.engine.floating_card_width)
@@ -787,20 +977,34 @@ class DanmuOverlay(QWidget):
         is_top = corner in ("topLeft", "topRight")
         is_left = corner in ("topLeft", "bottomLeft")
 
+        # Newest first so the corner-most slot always holds the latest message.
+        ordered = sorted(items, key=lambda it: it.add_time, reverse=True)
+
+        occupied: list[tuple[float, float]] = []  # (y_top, y_bottom) intervals
+
         if is_top:
             y = margin
-            for item in items:
-                x = margin if is_left else w - card_w - margin
+            for item in ordered:
                 layout = self._compute_card_layout(item, card_w, self.engine.floating_font_size)
-                self._draw_card_with_fade(painter, item, x, y, card_w, layout, now, fade_window)
-                y += layout["total_h"] + card_gap
+                card_h = layout["total_h"]
+                top_y = self._find_free_y(occupied, y, card_h, h, from_top=True, margin=margin)
+                if top_y is None:
+                    break  # screen full; drop remaining (older) items
+                x = margin if is_left else w - card_w - margin
+                self._draw_card_with_fade(painter, item, x, top_y, card_w, layout, now, fade_window)
+                occupied.append((top_y, top_y + card_h))
+                y = top_y + card_h + card_gap
         else:
             y = h - margin
-            for item in reversed(items):
-                x = margin if is_left else w - card_w - margin
+            for item in ordered:
                 layout = self._compute_card_layout(item, card_w, self.engine.floating_font_size)
-                top_y = y - layout["total_h"]
+                card_h = layout["total_h"]
+                top_y = self._find_free_y(occupied, y - card_h, card_h, h, from_top=False, margin=margin)
+                if top_y is None:
+                    break  # screen full; drop remaining (older) items
+                x = margin if is_left else w - card_w - margin
                 self._draw_card_with_fade(painter, item, x, top_y, card_w, layout, now, fade_window)
+                occupied.append((top_y, top_y + card_h))
                 y = top_y - card_gap
 
     def _draw_card_with_fade(self, painter: QPainter, item: DanmuItem,
@@ -819,26 +1023,36 @@ class DanmuOverlay(QWidget):
         painter.restore()
 
     def _compute_card_layout(self, item: DanmuItem, w: float,
-                              font_size: int) -> dict:
-        """Measure and compute the floating-card layout.
+                             font_size: int) -> dict:
+        """Measure and compute the floating-card layout (vertical, forum-style).
+
+        Vertical stack (top→bottom):
+            [ avatar ]
+            [ nickname ]
+            [ text …  ]
+            [ image ][ image ]
 
         Returns a dict with all geometry metrics and fonts so the card can be
-        drawn (and its height measured for stacking) without duplication.
+        drawn (and its height measured for stacking) without duplication. The
+        height is computed from every segment, so stacked cards never overlap.
         """
-        padding = 8
-        avatar_size = max(20, int(font_size * 1.2))
-        gap = 8
+        padding = 10
+        avatar_size = max(24, int(font_size * 1.2))
+        avatar_gap = 6
+        nick_gap = 4
         line_gap = 1
         image_max_h = 60
         image_gap = 6
 
+        show_avatar = self._effective_show_avatar() and bool(item.nickname)
+
         nick_font = QFont(self.font)
-        nick_font.setPointSize(max(8, font_size - 4))
-        nick_fm = QFontMetrics(nick_font)
+        nick_font.setPixelSize(max(8, font_size - 4))
+        nick_fm = QFontMetrics(nick_font, self)
 
         content_font = QFont(self.font)
-        content_font.setPointSize(max(8, font_size))
-        content_fm = QFontMetrics(content_font)
+        content_font.setPixelSize(max(8, font_size))
+        content_fm = QFontMetrics(content_font, self)
 
         text, img_urls = self._parse_content(item.content)
         show_images = self._effective_show_image() and item.has_image and img_urls
@@ -849,10 +1063,9 @@ class DanmuOverlay(QWidget):
         max_lines = None
         if self.engine.truncate_long_messages:
             max_lines = self.engine.max_message_lines
-        text_w = w - padding * 2 - (avatar_size + gap if self._effective_show_avatar() else 0)
-        text_w = max(40, text_w)
-        content_lines = self._wrap_text(text, content_fm, int(text_w), max_lines)
-        total_raw = self._wrap_text(text, content_fm, int(text_w))
+        text_w = max(40, int(w - padding * 2))
+        content_lines = self._wrap_text(text, content_fm, text_w, max_lines)
+        total_raw = self._wrap_text(text, content_fm, text_w)
         is_truncated = max_lines is not None and len(total_raw) > max_lines
         if is_truncated:
             content_lines.append("...")
@@ -860,10 +1073,9 @@ class DanmuOverlay(QWidget):
         line_h = content_fm.height()
         content_h = len(content_lines) * line_h + (len(content_lines) - 1) * line_gap
 
-        nick_h = nick_fm.height() if self.engine.show_nickname and item.nickname else 0
-        total_h = padding * 2 + nick_h + content_h
+        nick_h = nick_fm.height() if (self.engine.show_nickname and item.nickname) else 0
 
-        # Image block height
+        # Image block height (full card width)
         image_block_h = 0
         have_loaded_images = False
         if show_images:
@@ -886,23 +1098,34 @@ class DanmuOverlay(QWidget):
                 row_h = max(row_h, dh)
             image_block_h += row_h
             if image_block_h > 0:
-                image_block_h += padding
-            total_h += image_block_h
+                image_block_h += nick_gap  # gap between text and images
 
-        total_h = max(total_h, avatar_size + padding * 2)
+        # Total height: every segment stacked vertically + outer padding.
+        seg = padding
+        if show_avatar:
+            seg += avatar_size + avatar_gap
+        seg += nick_h
+        if nick_h > 0:
+            seg += nick_gap
+        seg += content_h
+        seg += image_block_h
+        total_h = seg + padding
 
         return {
             "padding": padding,
             "avatar_size": avatar_size,
-            "gap": gap,
+            "avatar_gap": avatar_gap,
+            "nick_gap": nick_gap,
             "line_gap": line_gap,
             "image_max_h": image_max_h,
             "image_gap": image_gap,
+            "show_avatar": show_avatar,
             "nick_font": nick_font,
             "nick_fm": nick_fm,
             "content_font": content_font,
             "content_fm": content_fm,
             "content_lines": content_lines,
+            "content_h": content_h,
             "nick_h": nick_h,
             "image_block_h": image_block_h,
             "text_w": text_w,
@@ -914,18 +1137,21 @@ class DanmuOverlay(QWidget):
 
     def _draw_card(self, painter: QPainter, item: DanmuItem,
                    x: float, y: float, w: float, layout: dict) -> None:
-        """Draw a floating card using a precomputed layout dict."""
+        """Draw a floating card using a precomputed layout dict (vertical)."""
         padding = layout["padding"]
         avatar_size = layout["avatar_size"]
-        gap = layout["gap"]
+        avatar_gap = layout["avatar_gap"]
+        nick_gap = layout["nick_gap"]
         line_gap = layout["line_gap"]
         image_max_h = layout["image_max_h"]
         image_gap = layout["image_gap"]
+        show_avatar = layout["show_avatar"]
         nick_font = layout["nick_font"]
         nick_fm = layout["nick_fm"]
         content_font = layout["content_font"]
         content_fm = layout["content_fm"]
         content_lines = layout["content_lines"]
+        content_h = layout["content_h"]
         nick_h = layout["nick_h"]
         image_block_h = layout["image_block_h"]
         text_w = layout["text_w"]
@@ -939,28 +1165,33 @@ class DanmuOverlay(QWidget):
         painter.setBrush(self.theme["card_bg"])
         painter.drawRoundedRect(QRectF(x, y, w, total_h), 8, 8)
 
-        # Layout: avatar+nickname (top line) → images → text
-        text_area_top = y + padding
+        content_x = x + padding
+        cur_y = y + padding
 
-        # 1. Draw avatar + nickname (same line, at top)
-        cur_x = x + padding
-        if self._effective_show_avatar() and item.nickname:
-            self._draw_avatar(painter, cur_x, text_area_top, avatar_size, item.nickname, item.avatar_url)
-            cur_x += avatar_size + gap
-        text_y = text_area_top + nick_fm.ascent()
+        # 1. Avatar (top, left-aligned)
+        if show_avatar:
+            self._draw_avatar(painter, content_x, cur_y, avatar_size, item.nickname, item.avatar_url)
+            cur_y += avatar_size + avatar_gap
+
+        # 2. Nickname (below avatar)
         if self.engine.show_nickname and item.nickname:
             painter.setPen(QPen(self._nickname_color()))
             painter.setFont(nick_font)
-            painter.drawText(int(cur_x), int(text_y), item.nickname)
+            painter.drawText(int(content_x), int(cur_y + nick_fm.ascent()), item.nickname)
+            cur_y += nick_fm.height() + nick_gap
 
-        # Content starts at the nickname's left edge so it aligns with the nickname
-        content_x = cur_x
+        # 3. Content text (below nickname)
+        text_y = cur_y + content_fm.ascent()
+        content_color = self.theme["red_packet"] if item.is_red_packet else self.theme["text"]
+        painter.setPen(QPen(content_color))
+        painter.setFont(content_font)
+        self._draw_text_block(painter, content_lines, content_x, text_y, content_color, content_fm, line_gap)
+        cur_y += content_h
 
-        # 2. Draw images (below avatar+nickname line)
-        images_top = text_area_top + (nick_fm.height() if self.engine.show_nickname and item.nickname else 0) + line_gap
+        # 4. Images (below text)
         if show_images and have_loaded_images:
             img_x = content_x
-            img_y = images_top
+            img_y = cur_y
             row_h = 0
             for url in img_urls[:3]:
                 cached = self._image_cache.get(url)
@@ -977,13 +1208,7 @@ class DanmuOverlay(QWidget):
                 self._draw_inline_image(painter, img_x, img_y, url, image_max_h)
                 img_x += dw + image_gap
                 row_h = max(row_h, dh)
-
-        # 3. Draw content text (below images)
-        text_y2 = images_top + image_block_h + content_fm.ascent()
-        painter.setPen(QPen(self.theme["text"]))
-        painter.setFont(content_font)
-        content_color = self.theme["red_packet"] if item.is_red_packet else self.theme["text"]
-        self._draw_text_block(painter, content_lines, content_x, text_y2, content_color, content_fm, line_gap)
+            cur_y += image_block_h
 
         painter.setFont(self.font)
 
@@ -999,7 +1224,14 @@ class DanmuOverlay(QWidget):
             for url in img_urls:
                 self._image_cache.get(url)
 
-        self.engine.add_message(msg)
+        item = self.engine.add_message(msg)
+        # Pre-compute the estimated height so the engine can pack scrolling
+        # items without overlap even before the pixmap is measured.
+        if item is not None and item.height <= 0:
+            try:
+                _w, item.height = self.estimate_scrolling_size(item)
+            except Exception:
+                logger.debug("pre-estimate height failed", exc_info=True)
         if self.isVisible() and self.visible_flag:
             self.start_render_loop()
 

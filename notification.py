@@ -2,6 +2,7 @@
 
 import logging
 
+import config as cfg_module
 from PyQt6.QtCore import Qt, QTimer, QPoint, QPropertyAnimation, QEasingCurve
 from PyQt6.QtGui import QColor, QPainter
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel, QApplication, QGraphicsOpacityEffect
@@ -116,7 +117,7 @@ class NotificationManager:
         """Show a notification if screen is available."""
         try:
             popup = NotificationPopup(title, body, self.theme)
-            screen = QApplication.primaryScreen().availableGeometry()
+            screen = cfg_module.target_screen_geometry(QApplication.instance())
             x = screen.x() + screen.width() - popup.width() - self._margin[0]
             y = screen.y() + self._margin[1]
             for p in self._active[-self._max_visible:]:

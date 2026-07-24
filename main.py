@@ -15,6 +15,7 @@ from PyQt6.QtGui import QIcon, QPixmap, QPainter, QColor, QFont
 from PyQt6.QtWidgets import QApplication
 
 import config as cfg_module
+import screen_utils
 from auth import login as auth_login
 from chatroom import Connection as ChatroomConnection
 from danmu_engine import DanmuEngine
@@ -87,6 +88,15 @@ class MessageBridge(QObject):
     chatroom_error = pyqtSignal(str)
 
 
+def _clamp_scale(v) -> float:
+    """将相对系数限制在 [0.5, 2.0] 的合法范围内。"""
+    try:
+        v = float(v)
+    except (TypeError, ValueError):
+        return 1.0
+    return max(0.5, min(2.0, v))
+
+
 class App:
     """Main application controller."""
 
@@ -98,57 +108,28 @@ class App:
         self.config = cfg_module.load()
         self.config_path = cfg_module.default_config_path()
 
+        # 旧版绝对像素 -> 相对系数迁移（需要主屏几何，必须在 QApplication 之后）
+        self._migrate_legacy_pixels()
+
         # API key (not persisted directly, obtained from login)
         self.api_key = ""
         self.conn = None
         self.conn_lock = threading.Lock()
 
+        # 计算目标屏几何（位置/尺寸/基准像素都依赖它，必须先于创建后确定）
+        cfg_module.set_target_screen(self.config.display.display_screen)
+        self._last_screen_idx = self.config.display.display_screen
+        screen = cfg_module.target_screen_geometry(self.app)
+
         # Create danmu engine and overlay
         self.engine = DanmuEngine()
-        self.engine.update_config({
-            "danmuMode": "scrolling",
-            "showAvatar": self.config.display.show_avatar,
-            "showNickname": self.config.display.show_nickname,
-            "showImage": self.config.display.show_image,
-            "danmuSpeed": self.config.display.danmu_speed,
-            "danmuArea": self.config.display.danmu_area,
-            "danmuWidth": self.config.display.danmu_width,
-            "danmuHeight": self.config.display.danmu_height,
-            "danmuOpacity": self.config.display.danmu_opacity,
-            "fontSize": self.config.display.font_size,
-            "fontFamily": self.config.display.font_family,
-            "floatingDwellSeconds": self.config.display.floating_dwell_seconds,
-            "floatingMaxItems": self.config.display.floating_max_items,
-            "floatingCardWidth": self.config.display.floating_card_width,
-            "floatingFontSize": self.config.display.floating_font_size,
-        })
+        # 字号/边距/卡片宽度由「目标屏基准 × 相对系数」推导，切屏自动适配
+        self.engine.update_config(self._absolute_display(screen))
 
         self.overlay = DanmuOverlay(self.engine)
         # Set theme and outline config on overlay
-        self.overlay.update_config({
-            "danmuMode": self.config.display.danmu_mode,
-            "showAvatar": self.config.display.show_avatar,
-            "showNickname": self.config.display.show_nickname,
-            "showImage": self.config.display.show_image,
-            "showRedPacket": self.config.display.show_red_packet,
-            "showOutline": self.config.display.show_outline,
-            "simpleMode": self.config.display.simple_mode,
-            "topMargin": self.config.display.top_margin,
-            "danmuSpeed": self.config.display.danmu_speed,
-            "danmuArea": self.config.display.danmu_area,
-            "danmuWidth": self.config.display.danmu_width,
-            "danmuHeight": self.config.display.danmu_height,
-            "danmuOpacity": self.config.display.danmu_opacity,
-            "fontSize": self.config.display.font_size,
-            "fontFamily": self.config.display.font_family,
-            "floatingDwellSeconds": self.config.display.floating_dwell_seconds,
-            "floatingMaxItems": self.config.display.floating_max_items,
-            "floatingCardWidth": self.config.display.floating_card_width,
-            "floatingFontSize": self.config.display.floating_font_size,
-        }, self.config.theme)
+        self.overlay.update_config(self._absolute_display(screen), self.config.theme)
 
-        # Show overlay on the available screen area (excluding taskbar)
-        screen = self.app.primaryScreen().availableGeometry()
         self.overlay.setGeometry(screen)
         self.engine.set_container_size(
             float(screen.width()), float(screen.height()))
@@ -207,6 +188,10 @@ class App:
         # Show overlay and start render loop
         self.overlay.show()
         self.overlay.start_render_loop()
+
+        # React to monitor hot-plug (plug in / unplug a display).
+        self.app.screenAdded.connect(self._on_screens_changed)
+        self.app.screenRemoved.connect(self._on_screens_changed)
 
         # Auto-login if credentials saved
         QTimer.singleShot(500, self.auto_login)
@@ -462,8 +447,8 @@ class App:
         self.settings_dialog.raise_()
         self.settings_dialog.activateWindow()
 
-        # Position at the right edge of the primary screen
-        screen = QApplication.primaryScreen().availableGeometry()
+        # Position at the right edge of the target screen (跟随弹幕所在屏幕)
+        screen = cfg_module.target_screen_geometry(self.app)
         x = screen.x() + screen.width() - self.settings_dialog.width()
         y = screen.y()
         self.settings_dialog.setGeometry(x, y, self.settings_dialog.width(), screen.height())
@@ -471,6 +456,108 @@ class App:
         # Re-enable click-through when settings dialog closes
         self.settings_dialog.finished.connect(
             lambda: self.overlay.set_click_through(True))
+
+    def _absolute_display(self, screen) -> dict:
+        """把 config 中的相对系数解析为「当前目标屏」下的绝对像素 dict。
+
+        切屏时传入不同 screen，基准像素随之变化，从而自动适配目标屏。
+        底层 overlay/engine 只认绝对像素，本方法负责把系数换算成绝对像素。
+        """
+        base = screen_utils.baseline_sizes(screen)
+        d = self.config.display
+        return {
+            "danmuMode": d.danmu_mode,
+            "showAvatar": d.show_avatar,
+            "showNickname": d.show_nickname,
+            "showImage": d.show_image,
+            "showRedPacket": d.show_red_packet,
+            "showOutline": d.show_outline,
+            "simpleMode": d.simple_mode,
+            "topMargin": int(round(d.top_margin)),
+            "danmuSpeed": d.danmu_speed,
+            "danmuArea": d.danmu_area,
+            "danmuWidth": 100,
+            "danmuHeight": 100,
+            "danmuOpacity": d.danmu_opacity,
+            "fontSize": max(8, int(round(base["font_size"] * d.font_scale / 100.0))),
+            "fontFamily": d.font_family,
+            "floatingCorner": d.floating_corner,
+            "floatingDwellSeconds": d.floating_dwell_seconds,
+            "floatingMaxItems": d.floating_max_items,
+            "floatingCardWidth": max(80, int(round(base["floating_card_width"] * d.floating_card_scale))),
+            "floatingFontSize": max(8, int(round(base["floating_font_size"] * d.floating_font_scale / 100.0))),
+        }
+
+    def _migrate_legacy_pixels(self) -> None:
+        """将旧版绝对像素配置迁移为相对系数（基于主屏基准）。
+
+        旧 config.json 存的是 fontSize/topMargin/floatingCardWidth/floatingFontSize 等
+        绝对磅值；启动时用主屏基准反推出系数，使主屏视觉与升级前完全一致，
+        副屏则自动按比例适配。
+
+        旧值为磅值，新基准为像素值，换算系数 96/72。
+        """
+        legacy = self.config.display.legacy_pixels
+        if not legacy:
+            return
+        try:
+            primary = self.app.primaryScreen().availableGeometry()
+            base = screen_utils.baseline_sizes(primary)
+        except Exception:
+            base = {"font_size": 32, "top_margin": 21,
+                    "floating_card_width": 240, "floating_font_size": 21}
+        _PT2PX = 96.0 / 72.0  # 旧磅值 → 新像素
+        d = self.config.display
+        if "font_size" in legacy:
+            px = legacy["font_size"] * _PT2PX
+            d.font_scale = max(20, min(100, int(round(px / base["font_size"] * 100))))
+        if "top_margin" in legacy:
+            ratio = legacy["top_margin"] / (base["top_margin"] or 1)
+            d.top_margin = max(0, min(100, int(round((ratio - 0.5) * 20))))
+        if "floating_card_width" in legacy:
+            d.floating_card_scale = _clamp_scale(legacy["floating_card_width"] / (base["floating_card_width"] or 1))
+        if "floating_font_size" in legacy:
+            px = legacy["floating_font_size"] * _PT2PX
+            d.floating_font_scale = max(20, min(100, int(round(px / base["floating_font_size"] * 100))))
+        d.legacy_pixels = {}
+        try:
+            cfg_module.save(self.config, self.config_path)
+        except Exception as e:
+            logger.error(f"迁移配置保存失败: {e}")
+
+    def _apply_screen_geometry(self) -> None:
+        """Move the overlay + danmu container to the configured screen."""
+        cfg_module.set_target_screen(self.config.display.display_screen)
+        screen = cfg_module.target_screen_geometry(self.app)
+        self.overlay.setGeometry(screen)
+        self.engine.set_container_size(
+            float(screen.width()), float(screen.height()))
+        # 切屏后基准像素变化，重新下发绝对像素配置（系数 × 新基准），实现自动适配
+        self.overlay.update_config(self._absolute_display(screen), self.config.theme)
+        # Clear in-flight danmu so positions recompute on the new geometry.
+        try:
+            self.overlay.engine.clear_all()
+        except Exception:
+            pass
+
+    def _on_screens_changed(self, *args) -> None:
+        """Handle monitor hot-plug (plug in / unplug a display).
+
+        - Refresh the settings screen list if the dialog is open.
+        - Re-apply the overlay geometry to the configured screen. If the screen
+          that was removed is the one we were using, target_screen_geometry()
+          falls back to the primary screen automatically.
+        """
+        logger.info("显示器配置发生变化，重新应用屏幕几何")
+        if self.settings_dialog is not None:
+            try:
+                self.settings_dialog._refresh_screen_list()
+            except Exception as e:
+                logger.error(f"刷新设置窗口显示器列表失败: {e}")
+        try:
+            self._apply_screen_geometry()
+        except Exception as e:
+            logger.error(f"重新应用屏幕几何失败: {e}")
 
     def _on_config_saved(self, display_config: dict) -> None:
         """Handle config save from settings dialog."""
@@ -493,18 +580,21 @@ class App:
         self.config.display.danmu_width = display_config.get("danmuWidth", self.config.display.danmu_width)
         self.config.display.danmu_height = display_config.get("danmuHeight", self.config.display.danmu_height)
         self.config.display.danmu_opacity = display_config.get("danmuOpacity", self.config.display.danmu_opacity)
-        self.config.display.font_size = display_config.get("fontSize", self.config.display.font_size)
+        self.config.display.font_scale = display_config.get("fontScale", self.config.display.font_scale)
         self.config.display.font_family = display_config.get("fontFamily", self.config.display.font_family)
         self.config.display.floating_corner = display_config.get("floatingCorner", self.config.display.floating_corner)
         self.config.display.floating_dwell_seconds = display_config.get("floatingDwellSeconds", self.config.display.floating_dwell_seconds)
         self.config.display.floating_max_items = display_config.get("floatingMaxItems", self.config.display.floating_max_items)
-        self.config.display.floating_card_width = display_config.get("floatingCardWidth", self.config.display.floating_card_width)
-        self.config.display.floating_font_size = display_config.get("floatingFontSize", self.config.display.floating_font_size)
+        self.config.display.floating_card_scale = display_config.get("floatingCardScale", self.config.display.floating_card_scale)
+        self.config.display.floating_font_scale = display_config.get("floatingFontScale", self.config.display.floating_font_scale)
+        self.config.display.display_screen = display_config.get("displayScreen", self.config.display.display_screen)
 
         cfg_module.save(self.config, self.config_path)
 
-        # Update overlay
-        self.overlay.update_config(display_config, self.config.theme)
+        # Update overlay（用「目标屏基准 × 相对系数」重新下发绝对像素配置）
+        cfg_module.set_target_screen(self.config.display.display_screen)
+        screen = cfg_module.target_screen_geometry(self.app)
+        self.overlay.update_config(self._absolute_display(screen), self.config.theme)
 
         # Update input box theme
         if self.input_box:
@@ -523,6 +613,11 @@ class App:
             else:
                 logger.warning(f"Failed to change boss key to {new_boss_key}")
 
+        # Re-apply screen selection (e.g. secondary monitor) if it changed
+        if self.config.display.display_screen != self._last_screen_idx:
+            self._apply_screen_geometry()
+            self._last_screen_idx = self.config.display.display_screen
+
     # ── Tray callbacks ─────────────────────────────────────────
 
     def toggle_danmu(self) -> None:
@@ -540,27 +635,8 @@ class App:
         """Switch theme."""
         self.config.theme = theme
         cfg_module.save(self.config, self.config_path)
-        self.overlay.update_config({
-            "danmuMode": self.config.display.danmu_mode,
-            "showAvatar": self.config.display.show_avatar,
-            "showNickname": self.config.display.show_nickname,
-            "showImage": self.config.display.show_image,
-            "showRedPacket": self.config.display.show_red_packet,
-            "showOutline": self.config.display.show_outline,
-            "simpleMode": self.config.display.simple_mode,
-            "topMargin": self.config.display.top_margin,
-            "danmuSpeed": self.config.display.danmu_speed,
-            "danmuArea": self.config.display.danmu_area,
-            "danmuWidth": self.config.display.danmu_width,
-            "danmuHeight": self.config.display.danmu_height,
-            "danmuOpacity": self.config.display.danmu_opacity,
-            "fontSize": self.config.display.font_size,
-            "fontFamily": self.config.display.font_family,
-            "floatingDwellSeconds": self.config.display.floating_dwell_seconds,
-            "floatingMaxItems": self.config.display.floating_max_items,
-            "floatingCardWidth": self.config.display.floating_card_width,
-            "floatingFontSize": self.config.display.floating_font_size,
-        }, theme)
+        screen = cfg_module.target_screen_geometry(self.app)
+        self.overlay.update_config(self._absolute_display(screen), theme)
         self.overlay.engine.clear_all()
         self.notification_manager.set_theme(theme)
         self.tray.set_theme_checked(theme)
@@ -574,29 +650,8 @@ class App:
         self.config.display.danmu_mode = mode
         cfg_module.save(self.config, self.config_path)
 
-        display_config = {
-            "danmuMode": mode,
-            "showAvatar": self.config.display.show_avatar,
-            "showNickname": self.config.display.show_nickname,
-            "showImage": self.config.display.show_image,
-            "showRedPacket": self.config.display.show_red_packet,
-            "showOutline": self.config.display.show_outline,
-            "simpleMode": self.config.display.simple_mode,
-            "topMargin": self.config.display.top_margin,
-            "danmuSpeed": self.config.display.danmu_speed,
-            "danmuArea": self.config.display.danmu_area,
-            "danmuWidth": self.config.display.danmu_width,
-            "danmuHeight": self.config.display.danmu_height,
-            "danmuOpacity": self.config.display.danmu_opacity,
-            "fontSize": self.config.display.font_size,
-            "fontFamily": self.config.display.font_family,
-            "floatingCorner": self.config.display.floating_corner,
-            "floatingDwellSeconds": self.config.display.floating_dwell_seconds,
-            "floatingMaxItems": self.config.display.floating_max_items,
-            "floatingCardWidth": self.config.display.floating_card_width,
-            "floatingFontSize": self.config.display.floating_font_size,
-        }
-        self.overlay.update_config(display_config, self.config.theme)
+        screen = cfg_module.target_screen_geometry(self.app)
+        self.overlay.update_config(self._absolute_display(screen), self.config.theme)
         self.overlay.engine.clear_all()
         self.tray.set_mode_checked(mode)
         self.notification_manager.show("弹幕鱼排", f"已切换到{'滚动' if mode == 'scrolling' else '浮动'}模式")

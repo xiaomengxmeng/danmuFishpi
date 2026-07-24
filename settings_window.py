@@ -6,10 +6,10 @@ PyQt6-based settings panel styled to match the original GitHub-style drawer.
 import logging
 from typing import Callable
 
-from PyQt6.QtCore import Qt, pyqtSignal, QRectF, QTimer
+from PyQt6.QtCore import Qt, pyqtSignal, QRectF, QTimer, QEvent
 from PyQt6.QtGui import QFont, QPainter, QColor, QPen, QBrush
 from PyQt6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QWidget, QLabel, QLineEdit,
+    QApplication, QDialog, QVBoxLayout, QHBoxLayout, QWidget, QLabel, QLineEdit,
     QPushButton, QSlider, QCheckBox, QButtonGroup, QComboBox, QMessageBox,
     QFrame, QSizePolicy, QTextEdit, QScrollArea,
 )
@@ -19,7 +19,7 @@ from config import Config, dpapi_encrypt, dpapi_decrypt
 logger = logging.getLogger("danmuFishpi.settings")
 
 APP_NAME = "弹幕鱼排"
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.0.1"
 
 
 class ToggleSwitch(QWidget):
@@ -150,6 +150,18 @@ class SettingsDialog(QDialog):
         self._update_login_state()
         self._populate_form()
 
+        # 焦点离开设置面板时自动隐藏（恢复弹幕覆盖层穿透）
+        self._auto_hide_timer = QTimer(self)
+        self._auto_hide_timer.setSingleShot(True)
+        self._auto_hide_timer.setInterval(200)
+        self._auto_hide_timer.timeout.connect(self._try_auto_hide)
+
+        # 跟踪下拉列表打开数量，避免展开下拉（如显示器选择）时误隐藏
+        self._popup_open_count = 0
+        for cb in self.findChildren(QComboBox):
+            cb.aboutToShowPopup.connect(self._on_combo_popup_show)
+            cb.aboutToHidePopup.connect(self._on_combo_popup_hide)
+
     # ── Theme / Styling ─────────────────────────────────────────
 
     def _apply_theme(self):
@@ -175,6 +187,11 @@ class SettingsDialog(QDialog):
                 background: {c['bg_drawer']};
                 color: {c['text_primary']};
                 font-family: "Microsoft YaHei", "Segoe UI", sans-serif;
+            }}
+            /* 强制所有子控件继承主文字色（Qt 样式表不自动继承 color）。
+               更具体的选择器（如 #primaryBtn、#hintLabel、fieldLabel 等）会覆盖此默认值。 */
+            * {{
+                color: {c['text_primary']};
             }}
             #header {{
                 background: transparent;
@@ -370,6 +387,23 @@ class SettingsDialog(QDialog):
             #versionText {{
                 color: {c['text_muted']};
                 font-size: 11px;
+            }}
+            /* 下拉弹出列表（Popup）的深浅主题样式 */
+            QComboBox QAbstractItemView {{
+                background: {c['bg_input']};
+                color: {c['text_primary']};
+                border: 1px solid {c['border']};
+                border-radius: 6px;
+                selection-background-color: {c['accent']};
+                selection-color: #ffffff;
+                outline: 0;
+            }}
+            QComboBox QAbstractItemView::item {{
+                padding: 6px 10px;
+            }}
+            QComboBox QAbstractItemView::item:selected {{
+                background: {c['accent']};
+                color: #ffffff;
             }}
         """)
 
@@ -574,6 +608,20 @@ class SettingsDialog(QDialog):
 
         layout.addLayout(elements_grid)
 
+        # ── Display Screen ──
+        layout.addWidget(self._section_label("显示屏幕"))
+        screen_layout = QHBoxLayout()
+        screen_layout.setContentsMargins(0, 0, 0, 0)
+        screen_layout.setSpacing(8)
+        self.combo_screen = QComboBox()
+        self.combo_screen.setObjectName("combo")
+        self.combo_screen.addItem("主显示器 (跟随系统)", -1)
+        self.combo_screen.setMinimumWidth(260)
+        self.combo_screen.currentIndexChanged.connect(self._emit_config_save)
+        screen_layout.addWidget(self.combo_screen)
+        screen_layout.addStretch(1)
+        layout.addLayout(screen_layout)
+
         # ── Notification ──
         layout.addSpacing(6)
         layout.addWidget(self._section_label("通知"))
@@ -608,7 +656,7 @@ class SettingsDialog(QDialog):
         scroll_layout.setSpacing(10)
         scroll_layout.addWidget(self._section_label("滚动区域"))
         self.combo_area = QComboBox()
-        self.combo_area.addItems(["全屏", "上半屏", "下半屏"])
+        self.combo_area.addItems(["全屏", "上25%", "上半屏", "下半屏", "下25%"])
         self.combo_area.setObjectName("combo")
         scroll_layout.addWidget(self.combo_area)
         self.combo_area.currentIndexChanged.connect(self._emit_config_save)
@@ -638,10 +686,10 @@ class SettingsDialog(QDialog):
         float_layout.addLayout(self._slider_row("停留时间", self.slider_dwell, self.config.display.floating_dwell_seconds, "s"))
         self.slider_max_items = self._make_slider(1, 8, self.config.display.floating_max_items)
         float_layout.addLayout(self._slider_row("最大条数", self.slider_max_items, self.config.display.floating_max_items, ""))
-        self.slider_card_width = self._make_slider(160, 520, self.config.display.floating_card_width)
-        float_layout.addLayout(self._slider_row("卡片宽度", self.slider_card_width, self.config.display.floating_card_width, "px"))
-        self.slider_card_font = self._make_slider(8, 48, self.config.display.floating_font_size)
-        float_layout.addLayout(self._slider_row("卡片字号", self.slider_card_font, self.config.display.floating_font_size, "px"))
+        self.slider_card_width = self._make_slider(50, 200, int(self.config.display.floating_card_scale * 100))
+        float_layout.addLayout(self._slider_row("卡片宽度系数", self.slider_card_width, int(self.config.display.floating_card_scale * 100), "%"))
+        self.slider_card_font = self._make_slider(0, 100, int(self.config.display.floating_font_scale))
+        float_layout.addLayout(self._slider_row("卡片字号", self.slider_card_font, int(self.config.display.floating_font_scale), "%"))
         self.slider_dwell.valueChanged.connect(self._emit_config_save)
         self.slider_max_items.valueChanged.connect(self._emit_config_save)
         self.slider_card_width.valueChanged.connect(self._emit_config_save)
@@ -650,23 +698,17 @@ class SettingsDialog(QDialog):
 
         # Sliders
         layout.addWidget(self._section_label("参数调节"))
-        self.slider_speed = self._make_slider(1, 10, self.config.display.danmu_speed)
+        self.slider_speed = self._make_slider(0, 100, self.config.display.danmu_speed)
         layout.addLayout(self._slider_row("速度", self.slider_speed, self.config.display.danmu_speed, ""))
 
-        self.slider_width = self._make_slider(30, 100, self.config.display.danmu_width)
-        layout.addLayout(self._slider_row("宽度", self.slider_width, self.config.display.danmu_width, "%"))
-
-        self.slider_height = self._make_slider(30, 100, self.config.display.danmu_height)
-        layout.addLayout(self._slider_row("高度", self.slider_height, self.config.display.danmu_height, "%"))
-
-        self.slider_opacity = self._make_slider(30, 100, self.config.display.danmu_opacity)
+        self.slider_opacity = self._make_slider(0, 100, self.config.display.danmu_opacity)
         layout.addLayout(self._slider_row("不透明度", self.slider_opacity, self.config.display.danmu_opacity, "%"))
 
-        self.slider_font = self._make_slider(8, 48, self.config.display.font_size)
-        layout.addLayout(self._slider_row("字号", self.slider_font, self.config.display.font_size, "px"))
+        self.slider_font = self._make_slider(0, 100, int(self.config.display.font_scale))
+        layout.addLayout(self._slider_row("字号系数", self.slider_font, int(self.config.display.font_scale), "%"))
 
-        self.slider_top_margin = self._make_slider(0, 300, self.config.display.top_margin)
-        layout.addLayout(self._slider_row("顶部边距", self.slider_top_margin, self.config.display.top_margin, "px"))
+        self.slider_top_margin = self._make_slider(0, 100, int(self.config.display.top_margin))
+        layout.addLayout(self._slider_row("顶部边距", self.slider_top_margin, int(self.config.display.top_margin), "%"))
 
         layout.addWidget(self._section_label("字体"))
         self.combo_font = QComboBox()
@@ -712,8 +754,6 @@ class SettingsDialog(QDialog):
         self.combo_area.currentIndexChanged.connect(self._emit_config_save)
         self.combo_font.currentTextChanged.connect(self._emit_config_save)
         self.slider_speed.valueChanged.connect(self._emit_config_save)
-        self.slider_width.valueChanged.connect(self._emit_config_save)
-        self.slider_height.valueChanged.connect(self._emit_config_save)
         self.slider_opacity.valueChanged.connect(self._emit_config_save)
         self.slider_font.valueChanged.connect(self._emit_config_save)
         self.slider_top_margin.valueChanged.connect(self._emit_config_save)
@@ -741,9 +781,9 @@ class SettingsDialog(QDialog):
         self.input_boss_key.setPlaceholderText("例如: f10")
         layout.addWidget(self.input_boss_key)
 
-        hint = QLabel("支持键盘组合（如 f9、ctrl+shift+a）和鼠标侧键（mouse4 / mouse5）。如果设置后无效，说明该按键已被其他程序占用，请换一个。输入文字后按 Enter 发送，按 Esc 关闭。老板键用于一键隐藏/显示弹幕。")
+        hint = QLabel("支持单键（如 f9、mouse4）和组合键（如 ctrl+shift+a）。若设置无效，说明该按键已被其他程序占用，请更换。")
+        hint.setObjectName("hintLabel")
         hint.setWordWrap(True)
-        hint.setStyleSheet("color: #8b949e; font-size: 11px; line-height: 1.6;")
         layout.addWidget(hint)
 
         save_btn = QPushButton("保存热键")
@@ -819,19 +859,19 @@ class SettingsDialog(QDialog):
         self.chk_notify_follow.setChecked(self.config.display.notify_follow)
 
         self.slider_speed.setValue(self.config.display.danmu_speed)
-        area_map = {"fullscreen": 0, "topHalf": 1, "bottomHalf": 2}
+        area_map = {"fullscreen": 0, "top25": 1, "topHalf": 2, "bottomHalf": 3, "bottom25": 4}
         self.combo_area.setCurrentIndex(area_map.get(self.config.display.danmu_area, 0))
 
+        self._refresh_screen_list()
+
         self.slider_speed.setValue(self.config.display.danmu_speed)
-        self.slider_width.setValue(self.config.display.danmu_width)
-        self.slider_height.setValue(self.config.display.danmu_height)
         self.slider_opacity.setValue(self.config.display.danmu_opacity)
-        self.slider_font.setValue(self.config.display.font_size)
-        self.slider_top_margin.setValue(self.config.display.top_margin)
+        self.slider_font.setValue(int(self.config.display.font_scale))
+        self.slider_top_margin.setValue(int(self.config.display.top_margin))
         self.slider_dwell.setValue(self.config.display.floating_dwell_seconds)
         self.slider_max_items.setValue(self.config.display.floating_max_items)
-        self.slider_card_width.setValue(self.config.display.floating_card_width)
-        self.slider_card_font.setValue(self.config.display.floating_font_size)
+        self.slider_card_width.setValue(int(self.config.display.floating_card_scale * 100))
+        self.slider_card_font.setValue(int(self.config.display.floating_font_scale))
 
         idx = self.combo_font.findText(self.config.display.font_family)
         if idx >= 0:
@@ -945,7 +985,7 @@ class SettingsDialog(QDialog):
         self.panel_block_follow = panel
 
     def _emit_config_save(self):
-        area_map = {0: "fullscreen", 1: "topHalf", 2: "bottomHalf"}
+        area_map = {0: "fullscreen", 1: "top25", 2: "topHalf", 3: "bottomHalf", 4: "bottom25"}
         area = area_map.get(self.combo_area.currentIndex(), "fullscreen")
 
         # Determine mode
@@ -976,8 +1016,8 @@ class SettingsDialog(QDialog):
             "maxMessageLines": 3,
             "floatingDwellSeconds": self.slider_dwell.value(),
             "floatingMaxItems": self.slider_max_items.value(),
-            "floatingCardWidth": self.slider_card_width.value(),
-            "floatingFontSize": self.slider_card_font.value(),
+            "floatingCardScale": self.slider_card_width.value() / 100.0,
+            "floatingFontScale": self.slider_card_font.value(),
             "topMargin": self.slider_top_margin.value(),
             "notifyStartup": self.chk_notify_startup.isChecked(),
             "notifyLogin": self.chk_notify_login.isChecked(),
@@ -986,13 +1026,84 @@ class SettingsDialog(QDialog):
             "followedUserIds": followed_ids,
             "danmuSpeed": self.slider_speed.value(),
             "danmuArea": area,
-            "danmuWidth": self.slider_width.value(),
-            "danmuHeight": self.slider_height.value(),
+            "danmuWidth": 100,
+            "danmuHeight": 100,
             "danmuOpacity": self.slider_opacity.value(),
-            "fontSize": self.slider_font.value(),
+            "fontScale": self.slider_font.value(),
             "fontFamily": self.combo_font.currentText().strip() or "Microsoft YaHei",
+            "displayScreen": self.combo_screen.currentData(),
         }
         self.config_saved.emit(display_config)
+
+    def _refresh_screen_list(self):
+        """重新枚举所有显示器并填充下拉框，同时恢复当前选中项。
+
+        每次打开设置窗口（showEvent）以及配置回填（_populate_form）时调用，
+        以正确处理运行中热插拔显示器的场景。
+        """
+        cb = self.combo_screen
+        cb.blockSignals(True)
+        cb.clear()
+        cb.addItem("主显示器 (跟随系统)", -1)
+        try:
+            import screen_utils
+            for i, mon in enumerate(screen_utils.list_monitors()):
+                label = mon.get("name") or f"显示器 {i + 1}"
+                if mon.get("is_primary"):
+                    label += " (主)"
+                cb.addItem(f"显示器 {i + 1}: {label}", i)
+        except Exception as e:
+            logger.error(f"枚举显示器失败: {e}")
+        # 恢复当前选择
+        target = self.config.display.display_screen
+        sel = 0
+        for i in range(cb.count()):
+            if cb.itemData(i) == target:
+                sel = i
+                break
+        cb.setCurrentIndex(sel)
+        cb.blockSignals(False)
+
+    def showEvent(self, event):
+        # 每次显示都重新枚举，捕捉运行中新接入/移除的显示器。
+        self._refresh_screen_list()
+        super().showEvent(event)
+
+    def changeEvent(self, event):
+        # 窗口失去激活（焦点离开）时，延迟一小段时间后尝试自动隐藏，
+        # 避免点击面板内控件触发的瞬时失焦造成误隐藏。
+        if event.type() == QEvent.Type.ActivationChange:
+            if self.isActiveWindow():
+                self._auto_hide_timer.stop()
+            else:
+                self._auto_hide_timer.start()
+        super().changeEvent(event)
+
+    def _on_combo_popup_show(self):
+        self._popup_open_count += 1
+
+    def _on_combo_popup_hide(self):
+        self._popup_open_count = max(0, self._popup_open_count - 1)
+
+    def _try_auto_hide(self):
+        # 若窗口重新激活（兜底，避免瞬时无焦点误判），取消隐藏
+        if self.isActiveWindow():
+            return
+        # 下拉列表（如显示器选择）展开时不隐藏
+        if self._popup_open_count > 0:
+            return
+        # 焦点仍在面板内（含子控件）则取消隐藏
+        fw = QApplication.focusWidget()
+        if fw is not None and (self.isAncestorOf(fw) or fw is self):
+            return
+        # 下拉列表、弹窗或模态对话框打开时不隐藏
+        if QApplication.activePopupWidget() is not None:
+            return
+        if QApplication.activeModalWidget() is not None:
+            return
+        self.hide()
+        # 复用 finished 信号，恢复弹幕覆盖层的鼠标穿透
+        self.finished.emit(self.result())
 
     # ── Public State Updates ────────────────────────────────────
 

@@ -36,6 +36,37 @@ def _normalize_hotkey(hotkey_str: str) -> str:
     return "+".join(p.strip().lower() for p in hotkey_str.split("+") if p.strip())
 
 
+# Supported mouse side buttons and their `mouse` library button names
+_MOUSE_BUTTONS = {
+    "mouse4": "x",
+    "mouse5": "x2",
+    "mousex1": "x",
+    "mousex2": "x2",
+}
+
+# Modifier names recognized in a hotkey string
+_MODIFIER_NAMES = {
+    "ctrl", "control", "shift", "alt", "menu",
+    "win", "windows", "meta", "command",
+}
+
+
+def _split_hotkey(hotkey_str: str):
+    """Split 'ctrl+mouse5' -> (modifiers={'ctrl'}, main_key='mouse5').
+
+    Returns a tuple (set_of_modifier_names, main_key_or_None).
+    """
+    parts = [p.strip().lower() for p in hotkey_str.split("+") if p.strip()]
+    modifiers: set = set()
+    main_key = None
+    for p in parts:
+        if p in _MODIFIER_NAMES:
+            modifiers.add(p)
+        else:
+            main_key = p
+    return modifiers, main_key
+
+
 class HotkeyManager(QObject):
     """Manages a single global hotkey."""
 
@@ -60,9 +91,11 @@ class HotkeyManager(QObject):
 
         self._callback = callback
 
-        # Mouse side buttons support
-        if normalized.startswith("mouse"):
-            return self._register_mouse(normalized, callback)
+        # Mouse side buttons support (possibly combined with modifiers),
+        # e.g. 'ctrl+mouse5', 'shift+mouse4', or plain 'mouse5'.
+        modifiers, main_key = _split_hotkey(normalized)
+        if main_key in _MOUSE_BUTTONS:
+            return self._register_mouse(normalized, main_key, modifiers, callback)
 
         # Primary: keyboard library low-level hook
         try:
@@ -87,40 +120,60 @@ class HotkeyManager(QObject):
         # Fallback: Win32 RegisterHotKey + native event filter
         return self._register_win32(normalized, callback)
 
-    def _register_mouse(self, hotkey_str: str, callback: Callable) -> bool:
-        """Register a mouse side button (e.g. mouse4, mouse5)."""
+    def _register_mouse(self, normalized: str, mouse_key: str, modifiers: set, callback: Callable) -> bool:
+        """Register a mouse side button, optionally combined with modifiers
+        (e.g. 'ctrl+mouse5').
+
+        Modifier keys are verified inside the mouse callback so the hotkey only
+        fires when the configured modifier is still held down.
+        """
         try:
             import mouse
+            import keyboard
         except Exception as e:
-            logger.error(f"mouse library not available: {e}")
+            logger.error(f"mouse/keyboard library not available: {e}")
             return False
 
-        btn_map = {
-            "mouse4": "x",
-            "mouse5": "x2",
-            "mousex1": "x",
-            "mousex2": "x2",
-        }
-        btn = btn_map.get(hotkey_str)
+        btn = _MOUSE_BUTTONS.get(mouse_key)
         if not btn:
-            logger.error(f"Unsupported mouse button: {hotkey_str}")
+            logger.error(f"Unsupported mouse button: {mouse_key}")
             return False
+
+        def _modifier_held(name: str) -> bool:
+            try:
+                return keyboard.is_pressed(name)
+            except Exception:
+                return False
+
+        def _modifiers_held() -> bool:
+            for m in modifiers:
+                if m in ("ctrl", "control") and not _modifier_held("ctrl"):
+                    return False
+                elif m == "shift" and not _modifier_held("shift"):
+                    return False
+                elif m in ("alt", "menu") and not _modifier_held("alt"):
+                    return False
+                elif m in ("win", "windows", "meta", "command") and not _modifier_held("windows"):
+                    return False
+            return True
 
         def _mouse_callback():
-            logger.info(f"mouse hook triggered: {hotkey_str}")
-            print(f"[danmuFishpi] mouse hook triggered: {hotkey_str}", flush=True)
+            if not _modifiers_held():
+                return  # modifier not held -> ignore this click
+            logger.info(f"mouse hook triggered: {mouse_key}")
+            print(f"[danmuFishpi] mouse hook triggered: {mouse_key}", flush=True)
             self.triggered.emit()
 
         try:
             mouse.on_button(_mouse_callback, buttons=(btn,), types=("down",))
-            self._mouse_hook = hotkey_str
-            self._current_hotkey = hotkey_str
-            logger.info(f"Registered mouse button: {hotkey_str}")
-            print(f"[danmuFishpi] Registered mouse button: {hotkey_str}", flush=True)
+            self._mouse_hook = mouse_key
+            self._current_hotkey = normalized
+            logger.info(f"Registered mouse button: {normalized}")
+            print(f"[danmuFishpi] Registered mouse button: {normalized}", flush=True)
             self.triggered.connect(self._on_triggered)
             return True
         except Exception as e:
-            logger.error(f"mouse hook failed for '{hotkey_str}': {e}")
+            logger.error(f"mouse hook failed for '{mouse_key}': {e}")
             return False
 
     def _register_win32(self, hotkey_str: str, callback: Callable) -> bool:
