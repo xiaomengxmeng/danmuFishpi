@@ -102,6 +102,8 @@ class App:
 
     def __init__(self):
         self.app = QApplication(sys.argv)
+        from app_icon import render_fish
+        self.app.setWindowIcon(QIcon(render_fish(256)))
         self.app.setQuitOnLastWindowClosed(False)  # Tray keeps app alive
 
         # Load config
@@ -197,28 +199,9 @@ class App:
         QTimer.singleShot(500, self.auto_login)
 
     def _create_icon(self) -> QIcon:
-        """Create a simple app icon programmatically."""
-        pm = QPixmap(64, 64)
-        pm.fill(Qt.GlobalColor.transparent)
-        p = QPainter(pm)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        # Draw a simple fish-like shape
-        p.setBrush(QColor(88, 166, 255))
-        p.setPen(Qt.PenStyle.NoPen)
-        p.drawEllipse(16, 20, 36, 24)
-        # Tail
-        tail = __import__("PyQt6.QtGui", fromlist=["QPolygonF"])
-        from PyQt6.QtGui import QPolygonF
-        from PyQt6.QtCore import QPointF
-        poly = QPolygonF([QPointF(50, 32), QPointF(60, 22), QPointF(60, 42)])
-        p.drawPolygon(poly)
-        # Eye
-        p.setBrush(QColor(255, 255, 255))
-        p.drawEllipse(26, 26, 6, 6)
-        p.setBrush(QColor(0, 0, 0))
-        p.drawEllipse(28, 28, 3, 3)
-        p.end()
-        return QIcon(pm)
+        """Create the fish tray icon (shared artwork in app_icon.py)."""
+        from app_icon import render_fish
+        return QIcon(render_fish(64))
 
     # ── Chatroom message handling ──────────────────────────────
 

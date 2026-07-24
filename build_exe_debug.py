@@ -9,6 +9,11 @@ def main():
     here = os.path.dirname(os.path.abspath(__file__))
     os.chdir(here)
 
+    # Generate the fish icon (app.ico) before building.
+    import build_icon
+    if build_icon.main() != 0:
+        raise RuntimeError("Failed to generate app.ico")
+
     cmd = [
         sys.executable,
         "-m",
@@ -18,6 +23,7 @@ def main():
         "--console",
         "--noconfirm",
         "--clean",
+        "--icon", "app.ico",
         "--hidden-import", "PyQt6.sip",
         "--hidden-import", "PyQt6.QtCore",
         "--hidden-import", "PyQt6.QtGui",
