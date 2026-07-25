@@ -856,71 +856,21 @@ class DanmuOverlay(QWidget):
     def estimate_scrolling_size(self, item: DanmuItem) -> tuple[float, float]:
         """Estimate (width, height) of a scrolling item's rendered pixmap.
 
-        Mirrors the layout math in _get_item_pixmap (without actually drawing)
-        so the engine can place the item without vertical overlap before the
-        pixmap is measured. Returns (width, height) in CSS pixels.
+        Delegates to _layout_scrolling so the estimate is identical to what
+        _get_item_pixmap actually draws (no drift -> no overlap).
         """
-        max_width = int(self.engine.playfield_width * 0.6)
-        avatar_size = int(self.engine.font_size * 1.4)
-        padding = 12
-        line_gap = 4
-        image_max_h = 80
-        image_gap = 6
-
-        text, img_urls = self._parse_content(item.content)
-        show_images = self._effective_show_image() and item.has_image and img_urls
-        if item.has_image and not self._effective_show_image():
-            text = "[图片] " + text
-
-        # Prefix size (avatar + nickname) - one line
-        prefix_w = 0
-        if self._effective_show_avatar() and item.nickname:
-            prefix_w += avatar_size + 8
-        nick_text = ""
-        if self.engine.show_nickname and item.nickname:
-            nick_text = item.nickname + ": "
-            prefix_w += self.font_metrics.horizontalAdvance(nick_text) + 8
-
-        # Text layout — truncate if setting enabled
-        max_lines = None
-        if self.engine.truncate_long_messages:
-            max_lines = self.engine.max_message_lines
-        available_text_w = max(100, max_width - padding * 2)
-        text_lines = self._wrap_text(text, self.font_metrics, available_text_w, max_lines)
-        total_raw_lines = self._wrap_text(text, self.font_metrics, available_text_w)
-        is_truncated = max_lines is not None and len(total_raw_lines) > max_lines
-        if is_truncated:
-            text_lines.append("...")
-        line_h = self.font_metrics.height()
-        prefix_line_h = line_h + 5  # one line for avatar + nickname
-        text_content_h = len(text_lines) * line_h + (len(text_lines) - 1) * line_gap
-
-        longest_line_w = max(
-            (self.font_metrics.horizontalAdvance(line) for line in text_lines),
-            default=0,
-        )
-        content_width = max(1, prefix_w + longest_line_w + padding * 2)
-        content_width = min(content_width, max_width)
-
-        # Image block height (placeholder sizes; matches _get_item_pixmap)
-        image_block_h = 0
-        if show_images:
-            row_x = 0
-            row_h = 0
-            for _url in img_urls[:3]:
-                dw = dh = image_max_h
-                if row_x + dw > content_width - padding * 2 and row_x > 0:
-                    image_block_h += row_h + image_gap
-                    row_x = 0
-                    row_h = 0
-                row_x += dw + image_gap
-                row_h = max(row_h, dh)
-            image_block_h += row_h
-            if image_block_h > 0:
-                image_block_h += padding  # gap between images and text
-
-        height = prefix_line_h + image_block_h + text_content_h
-        return float(content_width), float(height)
+        lay = self._layout_scrolling(item)
+        if not lay.blocks:
+            # No measurable content (e.g. empty). Return a minimal size so the
+            # engine still places it without blocking tracks forever.
+            min_w = max(1, int(self.engine.font_size * 2))
+            min_h = self.font_metrics.height()
+            item.width = float(min_w)
+            item.height = float(min_h)
+            return float(min_w), float(min_h)
+        item.width = float(lay.content_w)
+        item.height = float(lay.total_h)
+        return float(lay.content_w), float(lay.total_h)
 
     def _get_item_pixmap(self, item: DanmuItem) -> QPixmap:
         """Get or create a pre-rendered pixmap for a scrolling item.
