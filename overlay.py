@@ -750,12 +750,13 @@ class DanmuOverlay(QWidget):
                 first_text_seen = True
                 out_blocks.append(TextBlockLayout(
                     lines=lines, y_offset=cur_y, height=bh, is_first_text=is_first))
-                # Track widest line (prefix counts only on first line).
+                # Track widest line. All content (text rows + image blocks)
+                # starts at text_col_x = padding + prefix_w, so the span from
+                # the pixmap's left padding to the content's right edge is
+                # prefix_w + content_width for EVERY row (not just the first).
                 for i, ln in enumerate(lines):
                     lw = self.font_metrics.horizontalAdvance(ln)
-                    if is_first and i == 0:
-                        lw += prefix_w
-                    longest_w = max(longest_w, lw)
+                    longest_w = max(longest_w, prefix_w + lw)
                 cur_y += bh + line_gap
             else:
                 # Image block
@@ -786,7 +787,7 @@ class DanmuOverlay(QWidget):
                 bh = row_h + padding  # gap below image block
                 out_blocks.append(ImageBlockLayout(
                     urls=urls, y_offset=cur_y, height=bh, width=row_w))
-                longest_w = max(longest_w, row_w)
+                longest_w = max(longest_w, prefix_w + row_w)
                 cur_y += bh + line_gap
 
         # Drop trailing gap, add bottom padding.
