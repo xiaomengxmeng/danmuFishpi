@@ -234,7 +234,8 @@ class DanmuEngine:
         first band whose entry rect does not intersect any existing item. This
         guarantees no overlap regardless of how tall/multi-line the item is.
 
-        Falls back to the topmost track if the screen is too crowded to fit.
+        Returns None when no free band exists at the entry edge; the caller
+        decides whether to enqueue or drop the item.
         """
         est_w, est_h = self._estimate_size(item)
         gap = max(6.0, self.font_size * 0.3)
@@ -330,26 +331,22 @@ class DanmuEngine:
             return
         now = time.time()
         playfield_right = self.playfield_left + self.playfield_width
-        kept: list[DanmuItem] = []
-        for item in self.queued_items:
+        i = 0
+        n = len(self.queued_items)
+        while i < n:
+            item = self.queued_items[i]
             item.start_time = now
             y = self.find_free_y(item)
             if y is None:
-                kept.append(item)
-                break  # screen still full; rest can't fit either
+                break  # screen still full; this and rest stay queued
             item.track_index = int(y)
             item.y = y
             item.x = playfield_right
             item.duration = (self.playfield_width + item.width) / self._px_speed
             self.scroll_items.append(item)
-        # Keep the rest (unprocessed) after the one that failed.
-        failed_idx = len(self.queued_items) - len(kept) - (1 if kept else 0)
-        if kept:
-            # `kept` holds the failing item; append remaining unprocessed tail.
-            remaining = self.queued_items[failed_idx + 1:] if failed_idx >= 0 else []
-            self.queued_items = kept + remaining
-        else:
-            self.queued_items = []
+            i += 1
+        # Keep the failing item (at index i) and all unprocessed items after it.
+        self.queued_items = self.queued_items[i:]
 
     def cleanup_floating(self) -> list[DanmuItem]:
         """Remove timed-out floating items and trim to max_items.
