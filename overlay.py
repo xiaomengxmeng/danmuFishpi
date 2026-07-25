@@ -594,6 +594,58 @@ class DanmuOverlay(QWidget):
         text = re.sub(r'<[^>]+>', '', text).strip()
         return text, img_urls
 
+    def _parse_segments(self, content: str) -> list:
+        """Return ordered content blocks preserving <img> position in the stream.
+
+        Consecutive <img> tags collapse into one ImageBlock (urls list).
+        Text between/around images becomes TextBlock(str). Other HTML tags
+        are stripped from text. Returns [] for empty content.
+
+        Examples:
+            "hi<img src=u>" -> [TextBlock("hi"), ImageBlock(["u"])]
+            "<img src=u>hi" -> [ImageBlock(["u"]), TextBlock("hi")]
+            "<img src=a>x<img src=b>" -> [ImageBlock(["a"]), TextBlock("x"), ImageBlock(["b"])]
+        """
+        import re
+
+        class TextBlock:
+            __slots__ = ("text",)
+            def __init__(self, text): self.text = text
+
+        class ImageBlock:
+            __slots__ = ("urls",)
+            def __init__(self, urls): self.urls = urls
+
+        blocks: list = []
+        pending_urls: list[str] = []
+        pending_text: list[str] = []
+
+        def _flush_text():
+            if pending_text:
+                t = re.sub(r'<[^>]+>', '', "".join(pending_text)).strip()
+                if t:
+                    blocks.append(TextBlock(t))
+                pending_text.clear()
+
+        def _flush_imgs():
+            if pending_urls:
+                blocks.append(ImageBlock(list(pending_urls)))
+                pending_urls.clear()
+
+        # Walk tokens: <img ...> vs everything else.
+        for m in re.finditer(r'(?is)(<img[^>]*>)|([^<]+)', content):
+            if m.group(1):  # an <img> tag
+                _flush_text()
+                src = re.search(r'(?is)src=["\']([^"\']+)["\']', m.group(1))
+                if src and src.group(1):
+                    pending_urls.append(src.group(1))
+            else:  # text run
+                _flush_imgs()
+                pending_text.append(m.group(2))
+        _flush_text()
+        _flush_imgs()
+        return blocks
+
     def _draw_inline_image(self, painter: QPainter, x: float, y: float,
                            url: str, max_size: int) -> tuple[int, int]:
         """Draw a scaled inline image with rounded corners (web-style).
