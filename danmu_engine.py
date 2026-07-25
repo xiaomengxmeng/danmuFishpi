@@ -76,7 +76,11 @@ class DanmuEngine:
         self.tracks: list[Track] = []
         self.scroll_items: list[DanmuItem] = []   # Active scrolling items
         self.float_items: list[DanmuItem] = []     # Floating items
+        self.queued_items: list[DanmuItem] = []    # FIFO: waiting for a free track
         self.max_float: int = 30                   # hard cap to bound memory
+
+        # Uniform scrolling speed (px/s); recomputed by update_config from danmu_speed.
+        self._px_speed: float = 150.0
 
         self.overlay = None  # set by overlay; used to estimate item height
 
@@ -117,6 +121,11 @@ class DanmuEngine:
         self.floating_card_width = display_config.get("floatingCardWidth", self.floating_card_width)
         self.floating_font_size = display_config.get("floatingFontSize", self.floating_font_size)
         self.max_float = max(self.floating_max_items, 8)
+
+        # Uniform pixel speed from danmu_speed (0-100) -> 80..220 px/s.
+        # Default danmu_speed=50 -> 150 px/s (close to prior feel).
+        speed_pct = max(0, min(100, self.danmu_speed)) / 100.0
+        self._px_speed = 80.0 + speed_pct * 140.0
 
         self.init_tracks()
 
@@ -215,7 +224,7 @@ class DanmuEngine:
                 return True
         return False
 
-    def find_free_y(self, item: DanmuItem) -> float:
+    def find_free_y(self, item: DanmuItem) -> Optional[float]:
         """Find a Y for a new scrolling item with zero 2D overlap.
 
         All scrolling items move left at the same speed, so their relative
@@ -243,10 +252,8 @@ class DanmuEngine:
                 return y
             y += step
 
-        # Screen too crowded: drop onto the topmost track so it still shows.
-        if self.tracks:
-            return min(self.tracks, key=lambda t: t.y).y
-        return float(self.playfield_top)
+        # No free band at the entry edge: caller decides enqueue vs drop.
+        return None
 
     def add_message(self, msg: dict) -> Optional[DanmuItem]:
         """Add a new message to the engine. Returns the created item or None."""
@@ -267,16 +274,18 @@ class DanmuEngine:
         return self._add_scrolling(item)
 
     def _add_scrolling(self, item: DanmuItem) -> Optional[DanmuItem]:
-        """Add item to scrolling mode."""
+        """Add item to scrolling mode; enqueue if no free track."""
         y = self.find_free_y(item)
+        if y is None:
+            self.queued_items.append(item)
+            return item
         item.track_index = int(y)
         item.y = y
         item.start_time = time.time()
-        # Duration: speed 0-100 (higher = faster). Maps ~25s (slow) .. 4s (fast).
-        item.duration = max(4.0, 25.0 - (self.danmu_speed / 100.0) * 21.0)
+        # Duration from uniform speed: distance / v.
+        item.duration = (self.playfield_width + item.width) / self._px_speed
         # Start position: right edge of the playfield.
         item.x = self.playfield_left + self.playfield_width
-
         self.scroll_items.append(item)
         return item
 
@@ -287,32 +296,60 @@ class DanmuEngine:
         return item
 
     def update_scrolling(self) -> None:
-        """Update positions of scrolling items and remove off-screen ones."""
+        """Update positions of scrolling items (uniform px/s) and remove off-screen.
+
+        Then backfill the queue: any track freed this tick pulls the next
+        queued item in (FIFO).
+        """
         now = time.time()
+        v = self._px_speed
+        playfield_right = self.playfield_left + self.playfield_width
         alive = []
         for item in self.scroll_items:
             if item.width <= 0:
                 # Pixmap not measured yet (e.g. image still loading). Hold the
-                # start time so that once width becomes available the item
-                # enters smoothly from the right edge instead of jumping in
-                # mid-screen (which looked like a "late render").
+                # start time so the item enters smoothly once width is known.
                 item.start_time = now
                 alive.append(item)
                 continue
 
             elapsed = now - item.start_time
-            progress = elapsed / item.duration
-            # Move across the playfield from its right edge to its left edge.
-            total_distance = self.playfield_width + item.width
-            playfield_right = self.playfield_left + self.playfield_width
-            item.x = playfield_right - progress * total_distance
+            # Uniform speed: x advances left by v*elapsed.
+            item.x = playfield_right - v * elapsed
 
             if item.x + item.width < self.playfield_left:
-                # Off-screen left of the playfield, remove
-                continue
+                continue  # off-screen left, drop
             alive.append(item)
 
         self.scroll_items = alive
+        self._backfill_queue()
+
+    def _backfill_queue(self) -> None:
+        """Pull queued items into freed tracks (FIFO). Stops at first failure."""
+        if not self.queued_items:
+            return
+        now = time.time()
+        playfield_right = self.playfield_left + self.playfield_width
+        kept: list[DanmuItem] = []
+        for item in self.queued_items:
+            item.start_time = now
+            y = self.find_free_y(item)
+            if y is None:
+                kept.append(item)
+                break  # screen still full; rest can't fit either
+            item.track_index = int(y)
+            item.y = y
+            item.x = playfield_right
+            item.duration = (self.playfield_width + item.width) / self._px_speed
+            self.scroll_items.append(item)
+        # Keep the rest (unprocessed) after the one that failed.
+        failed_idx = len(self.queued_items) - len(kept) - (1 if kept else 0)
+        if kept:
+            # `kept` holds the failing item; append remaining unprocessed tail.
+            remaining = self.queued_items[failed_idx + 1:] if failed_idx >= 0 else []
+            self.queued_items = kept + remaining
+        else:
+            self.queued_items = []
 
     def cleanup_floating(self) -> list[DanmuItem]:
         """Remove timed-out floating items and trim to max_items.
@@ -338,9 +375,10 @@ class DanmuEngine:
         return removed
 
     def clear_all(self) -> None:
-        """Clear all items."""
+        """Clear all items (including queued)."""
         self.scroll_items.clear()
         self.float_items.clear()
+        self.queued_items.clear()
 
     def has_content(self) -> bool:
         """Check if there are any items to render."""
