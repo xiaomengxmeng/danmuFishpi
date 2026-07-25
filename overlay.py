@@ -974,6 +974,10 @@ class DanmuOverlay(QWidget):
     def _draw_text_with_outline(self, painter: QPainter, text: str,
                                  x: int, y: int, color: QColor) -> None:
         """Draw text with a dark outline for readability on any background."""
+        # Coerce to int: PyQt6's drawText(int, int, str) overload rejects floats,
+        # and callers may pass float y_offsets from _layout_scrolling.
+        x = int(x)
+        y = int(y)
         if self.show_outline:
             outline_pen = QPen(self.theme["outline"])
             outline_pen.setWidth(2)
