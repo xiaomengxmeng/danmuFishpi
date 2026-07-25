@@ -875,104 +875,35 @@ class DanmuOverlay(QWidget):
     def _get_item_pixmap(self, item: DanmuItem) -> QPixmap:
         """Get or create a pre-rendered pixmap for a scrolling item.
 
-        Items containing animated GIFs are NOT cached — they are redrawn every
-        frame so the GIF animation plays. The pixmap cache is skipped for them.
+        Layout comes from _layout_scrolling (shared with estimate) so the
+        drawn pixmap matches the estimated size exactly. Items with animated
+        GIFs are redrawn every frame (not cached).
         """
-        # Parse text and images first to detect animated content
-        text, img_urls = self._parse_content(item.content)
-        show_images = self._effective_show_image() and item.has_image and img_urls
-
-        has_gif = False
-        if show_images:
-            for url in img_urls[:3]:
-                if self._image_cache.is_animated(url):
-                    has_gif = True
-                    break
-
-        # Don't cache items with animated GIFs — they need per-frame redraw
-        if not has_gif:
-            item_id = id(item)
-            if item_id in self._pixmaps:
-                return self._pixmaps[item_id]
-
-        max_width = int(self.engine.playfield_width * 0.6)
-        avatar_size = int(self.engine.font_size * 1.4)
-        padding = 12
-        line_gap = 4
-        image_max_h = 80
-        image_gap = 6
-
-        if item.has_image and not self._effective_show_image():
-            text = "[图片] " + text
-
-        # Prefix size (avatar + nickname) - one line
-        prefix_w = 0
-        if self._effective_show_avatar() and item.nickname:
-            prefix_w += avatar_size + 8
-        nick_text = ""
-        if self.engine.show_nickname and item.nickname:
-            nick_text = item.nickname + ": "
-            prefix_w += self.font_metrics.horizontalAdvance(nick_text) + 8
-
-        # Text layout — truncate if setting enabled
-        max_lines = None
-        if self.engine.truncate_long_messages:
-            max_lines = self.engine.max_message_lines
-        available_text_w = max(100, max_width - padding * 2)
-        text_lines = self._wrap_text(text, self.font_metrics, available_text_w, max_lines)
-        total_raw_lines = self._wrap_text(text, self.font_metrics, available_text_w)
-        is_truncated = max_lines is not None and len(total_raw_lines) > max_lines
-        if is_truncated:
-            text_lines.append("...")
-        line_h = self.font_metrics.height()
-        prefix_line_h = line_h + 5  # one line for avatar + nickname
-        text_content_h = len(text_lines) * line_h + (len(text_lines) - 1) * line_gap
-
-        longest_line_w = max(
-            (self.font_metrics.horizontalAdvance(line) for line in text_lines),
-            default=0,
-        )
-        content_width = max(1, prefix_w + longest_line_w + padding * 2)
-        content_width = min(content_width, max_width)
-
-        # Image block
-        image_block_h = 0
-        have_loaded_images = False
-        if show_images:
-            row_x = 0
-            row_h = 0
-            for url in img_urls[:3]:
-                cached = self._image_cache.get(url)
-                if cached and not cached.isNull():
-                    have_loaded_images = True
-                    scale = min(image_max_h / cached.height(), image_max_h / cached.width(), 1.0)
-                    dw = int(cached.width() * scale)
-                    dh = int(cached.height() * scale)
-                else:
-                    dw = dh = image_max_h
-                if row_x + dw > content_width - padding * 2 and row_x > 0:
-                    image_block_h += row_h + image_gap
-                    row_x = 0
-                    row_h = 0
-                row_x += dw + image_gap
-                row_h = max(row_h, dh)
-            image_block_h += row_h
-            if image_block_h > 0:
-                image_block_h += padding  # gap between images and text
-
-        # Total height: prefix_line + image_block + text_content + padding
-        # Layout: [Avatar] [Nickname]  →  [Images]  →  [Text]
-        height = prefix_line_h + image_block_h + text_content_h
-
-        if content_width <= 0 or height <= 0:
+        lay = self._layout_scrolling(item)
+        if not lay.blocks or lay.content_w <= 0 or lay.total_h <= 0:
             return QPixmap()
 
-        # Update item dimensions
-        item.width = content_width
-        item.height = height
+        # Detect animated GIF across all image blocks.
+        has_gif = False
+        for b in lay.blocks:
+            if hasattr(b, "urls"):
+                for url in b.urls:
+                    if self._image_cache.is_animated(url):
+                        has_gif = True
+                        break
+                if has_gif:
+                    break
+
+        if not has_gif:
+            cached = self._pixmaps.get(id(item))
+            if cached is not None:
+                return cached
+
+        item.width = float(lay.content_w)
+        item.height = float(lay.total_h)
 
         dpr = self.devicePixelRatio()
-        target_pm = QPixmap(int(content_width * dpr), int(height * dpr))
+        target_pm = QPixmap(int(lay.content_w * dpr), int(lay.total_h * dpr))
         target_pm.setDevicePixelRatio(dpr)
         target_pm.fill(Qt.GlobalColor.transparent)
 
@@ -982,48 +913,47 @@ class DanmuOverlay(QWidget):
             p.setRenderHint(QPainter.RenderHint.TextAntialiasing)
             p.setFont(self.font)
 
-            cur_x = padding
-            cur_y = 0
-
-            # 1. Draw avatar + nickname (first line, at top)
-            if self._effective_show_avatar() and item.nickname:
-                self._draw_avatar(p, cur_x, 5, avatar_size, item.nickname, item.avatar_url)
-                cur_x += avatar_size + 8
-            if self.engine.show_nickname and item.nickname:
-                self._draw_text_with_outline(p, nick_text, cur_x,
-                                             self.font_metrics.ascent() + 5,
-                                             self._nickname_color())
-                cur_x += self.font_metrics.horizontalAdvance(nick_text) + 8
-
-            # 2. Draw images (below first line, only if loaded)
-            if show_images and have_loaded_images:
-                img_x = padding
-                img_y = prefix_line_h
-                row_h = 0
-                for url in img_urls[:3]:
-                    cached = self._image_cache.get(url)
-                    if cached and not cached.isNull():
-                        scale = min(image_max_h / cached.height(), image_max_h / cached.width(), 1.0)
-                        dw = int(cached.width() * scale)
-                        dh = int(cached.height() * scale)
-                    else:
-                        dw = dh = image_max_h
-                    if img_x + dw > content_width - padding and img_x > padding:
-                        img_x = padding
-                        img_y += row_h + image_gap
-                        row_h = 0
-                    self._draw_inline_image(p, img_x, img_y, url, image_max_h)
-                    img_x += dw + image_gap
-                    row_h = max(row_h, dh)
-
-            # 3. Draw text content (below images)
-            text_y = prefix_line_h + image_block_h + self.font_metrics.ascent()
+            padding = lay.padding
+            text_col_x = lay.text_column_x
+            line_h = self.font_metrics.height()
+            line_gap = 4
+            ascent = self.font_metrics.ascent()
             text_color = self.theme["red_packet"] if item.is_red_packet else self.theme["text"]
-            self._draw_text_block(p, text_lines, padding, text_y, text_color)
+            nick_color = self._nickname_color()
+            show_avatar = self._effective_show_avatar() and bool(item.nickname)
+
+            avatar_drawn = False
+            nick_drawn = False
+
+            for b in lay.blocks:
+                if hasattr(b, "lines"):  # TextBlockLayout
+                    y = b.y_offset
+                    for i, ln in enumerate(b.lines):
+                        line_y = y + i * (line_h + line_gap) + ascent
+                        if b.is_first_text and i == 0:
+                            # First text line: draw avatar + nickname + text inline.
+                            cur_x = padding
+                            if show_avatar and not avatar_drawn:
+                                self._draw_avatar(p, cur_x, y + 2,
+                                                  lay.avatar_size, item.nickname, item.avatar_url)
+                                cur_x += lay.avatar_size + 8
+                                avatar_drawn = True
+                            if lay.nick_text and not nick_drawn:
+                                self._draw_text_with_outline(p, lay.nick_text, cur_x, line_y, nick_color)
+                                cur_x += self.font_metrics.horizontalAdvance(lay.nick_text) + 8
+                                nick_drawn = True
+                            self._draw_text_with_outline(p, ln, text_col_x, line_y, text_color)
+                        else:
+                            self._draw_text_with_outline(p, ln, text_col_x, line_y, text_color)
+                else:  # ImageBlockLayout
+                    img_y = b.y_offset
+                    img_x = text_col_x
+                    for url in b.urls:
+                        dw, dh = self._draw_inline_image(p, img_x, img_y, url, 80)
+                        img_x += dw + 6
         finally:
             p.end()
 
-        # Only cache non-animated items
         if not has_gif:
             self._pixmaps[id(item)] = target_pm
         return target_pm
