@@ -12,7 +12,8 @@ import ctypes
 import logging
 import sys
 import time
-from typing import Optional
+from dataclasses import dataclass
+from typing import Optional, Union
 
 from PyQt6.QtCore import Qt, QTimer, QRect, QRectF, QPointF, QElapsedTimer
 from PyQt6.QtGui import (
@@ -57,6 +58,37 @@ DT_CAP = 0.1
 def apply_click_through(hwnd: int, enable: bool) -> None:
     """Toggle WS_EX_TRANSPARENT on the window's extended style."""
     apply_overlay_exstyles(hwnd, click_through=enable)
+
+
+@dataclass
+class TextBlockLayout:
+    """Layout result for one text block."""
+    lines: list[str]
+    y_offset: float
+    height: float
+    is_first_text: bool = False   # first text block merges avatar+nickname into line 0
+
+
+@dataclass
+class ImageBlockLayout:
+    """Layout result for one image block (urls laid out horizontally)."""
+    urls: list[str]
+    y_offset: float
+    height: float
+    width: float                  # total width of the image row
+
+
+@dataclass
+class ScrollLayout:
+    """Full layout for a scrolling danmu item, shared by measure + draw."""
+    blocks: list[Union[TextBlockLayout, ImageBlockLayout]]
+    total_h: float
+    content_w: float
+    prefix_w: float               # avatar + nickname width on the first line
+    text_column_x: float          # left x for text rows / image blocks
+    avatar_size: int
+    nick_text: str
+    padding: int
 
 
 class DanmuOverlay(QWidget):
@@ -645,6 +677,130 @@ class DanmuOverlay(QWidget):
         _flush_text()
         _flush_imgs()
         return blocks
+
+    def _layout_scrolling(self, item: DanmuItem) -> ScrollLayout:
+        """Compute the full vertical layout of a scrolling danmu item.
+
+        Shared by estimate_scrolling_size() and _get_item_pixmap() so the two
+        never drift apart. Layout rules (see spec §4.2):
+          - blocks in original message order (images may be above or below text)
+          - avatar+nickname merge into the FIRST text block's first line
+          - subsequent text lines and all image blocks left-align to text_column_x
+        """
+        max_width = int(self.engine.playfield_width * 0.6)
+        avatar_size = int(self.engine.font_size * 1.4)
+        padding = 12
+        line_gap = 4
+        image_max_h = 80
+        image_gap = 6
+        prefix_gap = 8  # gap between avatar and nickname, nickname and text
+
+        blocks_in = self._parse_segments(item.content)
+        show_images = self._effective_show_image() and item.has_image
+        show_avatar = self._effective_show_avatar() and bool(item.nickname)
+
+        # Prefix width (avatar + nickname) on the first line.
+        nick_text = ""
+        if self.engine.show_nickname and item.nickname:
+            nick_text = item.nickname + ": "
+        prefix_w = 0
+        if show_avatar:
+            prefix_w += avatar_size + prefix_gap
+        if nick_text:
+            prefix_w += self.font_metrics.horizontalAdvance(nick_text) + prefix_gap
+
+        text_column_x = float(padding + prefix_w)
+        text_avail_w = max(100, int(max_width - padding * 2 - prefix_w))
+
+        # Truncation cap (total text lines across all text blocks combined).
+        max_lines = None
+        if self.engine.truncate_long_messages:
+            max_lines = self.engine.max_message_lines
+
+        line_h = self.font_metrics.height()
+
+        out_blocks: list = []
+        cur_y = 0.0
+        text_lines_used = 0
+        first_text_seen = False
+        longest_w = 0.0
+
+        for b in blocks_in:
+            if hasattr(b, "text"):
+                # Text block
+                raw_lines = self._wrap_text(b.text, self.font_metrics, text_avail_w)
+                remaining = None
+                if max_lines is not None:
+                    remaining = max(0, max_lines - text_lines_used)
+                    if remaining == 0:
+                        # No more text budget: drop this block entirely.
+                        continue
+                    lines = raw_lines[:remaining]
+                    if len(raw_lines) > remaining:
+                        # Replace last kept line with a truncated marker.
+                        if lines:
+                            lines = lines[:-1] + [lines[-1].rstrip() + " ..."]
+                        else:
+                            lines = ["..."]
+                else:
+                    lines = raw_lines
+                text_lines_used += len(lines)
+                bh = len(lines) * line_h + max(0, len(lines) - 1) * line_gap
+                is_first = not first_text_seen
+                first_text_seen = True
+                out_blocks.append(TextBlockLayout(
+                    lines=lines, y_offset=cur_y, height=bh, is_first_text=is_first))
+                # Track widest line (prefix counts only on first line).
+                for i, ln in enumerate(lines):
+                    lw = self.font_metrics.horizontalAdvance(ln)
+                    if is_first and i == 0:
+                        lw += prefix_w
+                    longest_w = max(longest_w, lw)
+                cur_y += bh + line_gap
+            else:
+                # Image block
+                if not show_images:
+                    continue
+                urls = b.urls[:3]
+                if not urls:
+                    continue
+                row_w = 0.0
+                row_h = 0.0
+                measured: list[tuple[str, int, int]] = []
+                for url in urls:
+                    cached = self._image_cache.get(url)
+                    if cached and not cached.isNull():
+                        scale = min(image_max_h / cached.height(), image_max_h / cached.width(), 1.0)
+                        dw = int(cached.width() * scale)
+                        dh = int(cached.height() * scale)
+                    else:
+                        dw = dh = image_max_h
+                    if row_w + dw > text_avail_w and row_w > 0:
+                        # would overflow; but we keep single row for simplicity
+                        # (matches prior behavior: 3 images in a row max)
+                        pass
+                    measured.append((url, dw, dh))
+                    row_w += dw + image_gap
+                    row_h = max(row_h, dh)
+                row_w = max(0, row_w - image_gap)  # drop trailing gap
+                bh = row_h + padding  # gap below image block
+                out_blocks.append(ImageBlockLayout(
+                    urls=urls, y_offset=cur_y, height=bh, width=row_w))
+                longest_w = max(longest_w, row_w)
+                cur_y += bh + line_gap
+
+        # Drop trailing gap, add bottom padding.
+        if out_blocks:
+            cur_y -= line_gap
+        total_h = cur_y + padding  # bottom padding (top handled by draw offset)
+
+        content_w = max(1, int(min(max_width, longest_w + padding * 2)))
+
+        return ScrollLayout(
+            blocks=out_blocks, total_h=total_h, content_w=content_w,
+            prefix_w=prefix_w, text_column_x=text_column_x,
+            avatar_size=avatar_size, nick_text=nick_text, padding=padding,
+        )
 
     def _draw_inline_image(self, painter: QPainter, x: float, y: float,
                            url: str, max_size: int) -> tuple[int, int]:
