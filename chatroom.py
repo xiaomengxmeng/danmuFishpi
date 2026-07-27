@@ -14,6 +14,7 @@ from typing import Callable, Optional
 import httpx
 import websocket  # websocket-client library
 
+from dedup import MessageDeduper
 from message import process_message
 
 logger = logging.getLogger("danmuFishpi.chatroom")
@@ -43,6 +44,10 @@ class Connection:
         self._max_reconnect_delay = 60.0
         self._ws_url: Optional[str] = None
         self.is_connected = False
+        # De-dup by oId: survives across reconnects (same Connection
+        # instance) so server-replayed history after a reconnect is
+        # dropped instead of being displayed again.
+        self._deduper = MessageDeduper()
 
     def _set_connected(self, connected: bool) -> None:
         if self.is_connected != connected:
@@ -135,6 +140,18 @@ class Connection:
             msg_type = msg.get("type", "")
             nickname = msg.get("userNickname") or msg.get("userName", "")
             content = msg.get("content", "")[:60]
+
+            # De-dup by oId: the server replays recent history after a
+            # reconnect; drop messages we have already seen. The deduper
+            # is NOT reset on reconnect, so replayed oIds are recognized.
+            oId = msg.get("oId")
+            if oId is not None and not self._deduper.check_and_record(oId):
+                logger.debug(
+                    f"Dedup skip oId={oId} type={msg_type} "
+                    f"from={nickname}: {content}"
+                )
+                return
+
             processed = process_message(msg)
             if processed:
                 logger.info(f"Recv msg type={msg_type} from={nickname}: {content}")
