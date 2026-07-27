@@ -19,7 +19,7 @@ from config import Config, dpapi_encrypt, dpapi_decrypt
 logger = logging.getLogger("danmuFishpi.settings")
 
 APP_NAME = "弹幕鱼排"
-APP_VERSION = "1.0.2"
+APP_VERSION = "1.0.3"
 
 
 class ToggleSwitch(QWidget):
