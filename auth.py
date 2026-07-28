@@ -16,7 +16,7 @@ def md5_password(password: str) -> str:
 
 
 def login(username: str, password: str, mfa_code: str = "") -> dict:
-    """Login to fishpi and return {'success': bool, 'api_key': str, 'error': str|None}.
+    """Login to fishpi and return {'success': bool, 'api_key': str, 'error': str|None, 'need_mfa': bool}.
 
     POSTs to /api/getKey with MD5-hashed password.
     """
@@ -40,11 +40,14 @@ def login(username: str, password: str, mfa_code: str = "") -> dict:
         resp.raise_for_status()
         data = resp.json()
     except Exception as e:
-        return {"success": False, "api_key": "", "error": str(e)}
+        return {"success": False, "api_key": "", "error": str(e),
+                "need_mfa": False}
 
     if data.get("code") != 0:
-        return {"success": False, "api_key": "",
-                "error": data.get("msg", "登录失败")}
+        msg = data.get("msg", "登录失败")
+        need_mfa = msg.startswith("两步验证失败")
+        return {"success": False, "api_key": "", "error": msg,
+                "need_mfa": need_mfa}
 
     return {"success": True, "api_key": data.get("Key", ""),
-            "error": None}
+            "error": None, "need_mfa": False}
