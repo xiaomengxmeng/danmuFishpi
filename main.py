@@ -118,6 +118,11 @@ class App:
         self.conn = None
         self.conn_lock = threading.Lock()
 
+        # MFA-pending state: set when auto-login fails due to 2FA requirement
+        # so that opening the settings dialog can show the MFA input directly
+        self._mfa_pending = False
+        self._mfa_password = ""  # decrypted password, cleared after use
+
         # 计算目标屏几何（位置/尺寸/基准像素都依赖它，必须先于创建后确定）
         cfg_module.set_target_screen(self.config.display.display_screen)
         self._last_screen_idx = self.config.display.display_screen
@@ -240,6 +245,8 @@ class App:
                          need_mfa: bool = False) -> None:
         """Handle login result (called on main thread)."""
         if success:
+            self._mfa_pending = False
+            self._mfa_password = ""
             self.api_key = api_key
             self.start_chatroom(api_key)
             if self.settings_dialog:
@@ -247,15 +254,22 @@ class App:
             if self.config.display.notify_login:
                 self.notification_manager.show("弹幕鱼排", "登录成功，聊天室已连接")
         else:
-            if need_mfa and not self.settings_dialog:
-                # Auto-login scenario: no settings dialog open, notify user
-                self.notification_manager.show(
-                    "弹幕鱼排",
-                    "自动登录需要两步验证，请打开设置手动登录",
-                )
-                logger.info("Auto-login requires MFA, user notified")
+            if need_mfa:
+                self._mfa_pending = True
+                if not self.settings_dialog:
+                    # Auto-login scenario: no settings dialog open yet.
+                    # Pop up the settings panel directly so the user can
+                    # enter the MFA code without digging through the tray.
+                    self.notification_manager.show(
+                        "弹幕鱼排",
+                        "自动登录需要两步验证，请在弹出的设置面板中输入验证码",
+                    )
+                    self.show_settings()
+                    logger.info("Auto-login requires MFA, settings panel opened")
+                else:
+                    self.settings_dialog.on_login_failed(error or "未知错误", True)
             elif self.settings_dialog:
-                self.settings_dialog.on_login_failed(error or "未知错误", need_mfa)
+                self.settings_dialog.on_login_failed(error or "未知错误", False)
             logger.error(f"Login failed: {error}")
 
     def _on_chatroom_error(self, error: str) -> None:
@@ -287,6 +301,8 @@ class App:
 
     def do_logout(self) -> None:
         """Logout and disconnect."""
+        self._mfa_pending = False
+        self._mfa_password = ""
         with self.conn_lock:
             if self.conn:
                 self.conn.stop()
@@ -329,6 +345,10 @@ class App:
         except Exception as e:
             logger.error(f"Password decryption failed: {e}")
             return
+
+        # Keep decrypted password temporarily so the settings dialog can
+        # pre-fill it if the server requires MFA (avoids re-typing password).
+        self._mfa_password = password
 
         logger.info(f"Auto-login as {self.config.account.username}...")
         self.do_login(self.config.account.username, password)
@@ -453,6 +473,12 @@ class App:
             is_connected = self.conn.is_connected if self.conn else False
             self.settings_dialog.set_connected(is_connected)
             self.settings_dialog.set_active_hotkey(self.hotkey_mgr._current_hotkey)
+
+        # If auto-login failed due to MFA, show the MFA input directly
+        # instead of the misleading "已登录" state.
+        if self._mfa_pending:
+            self.settings_dialog.show_mfa_prompt(
+                self.config.account.username, self._mfa_password)
 
         # Disable click-through while settings are open
         self.overlay.set_click_through(False)

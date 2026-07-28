@@ -1206,6 +1206,29 @@ class SettingsDialog(QDialog):
             self.input_mfa.clear()
             QMessageBox.warning(self, "登录失败", error)
 
+    def show_mfa_prompt(self, username: str, password: str = ""):
+        """Show the login form with MFA fields visible.
+
+        Called when auto-login failed due to 2FA and the user opens
+        settings. Pre-fills username and (optionally) password so the
+        user only needs to enter the verification code.
+        """
+        self._logged_in = False
+        self._update_login_state()
+        self.input_username.setText(username)
+        if password:
+            self.input_password.setText(password)
+        self.btn_login.setText("登 录")
+        self.btn_login.setEnabled(True)
+        self.lbl_mfa_hint.show()
+        self.lbl_mfa_field.show()
+        self.input_mfa.show()
+        self.input_mfa.clear()
+        if password:
+            self.input_mfa.setFocus()
+        else:
+            self.input_password.setFocus()
+
     def on_logout(self):
         self._logged_in = False
         self.config.account.username = ""
