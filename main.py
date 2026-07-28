@@ -84,7 +84,7 @@ if hasattr(threading, "excepthook"):
 class MessageBridge(QObject):
     """Bridge signals from background threads to the Qt main thread."""
     new_message = pyqtSignal(dict)
-    login_result = pyqtSignal(bool, str, str)  # success, api_key, error
+    login_result = pyqtSignal(bool, str, str, bool)  # success, api_key, error, need_mfa
     chatroom_error = pyqtSignal(str)
 
 
@@ -233,7 +233,8 @@ class App:
         self.overlay.add_message(msg)
         logger.info(f"Displayed message from {nickname}: {content}")
 
-    def _on_login_result(self, success: bool, api_key: str, error: str) -> None:
+    def _on_login_result(self, success: bool, api_key: str, error: str,
+                         need_mfa: bool = False) -> None:
         """Handle login result (called on main thread)."""
         if success:
             self.api_key = api_key
@@ -243,8 +244,15 @@ class App:
             if self.config.display.notify_login:
                 self.notification_manager.show("弹幕鱼排", "登录成功，聊天室已连接")
         else:
-            if self.settings_dialog:
-                self.settings_dialog.on_login_failed(error or "未知错误")
+            if need_mfa and not self.settings_dialog:
+                # Auto-login scenario: no settings dialog open, notify user
+                self.notification_manager.show(
+                    "弹幕鱼排",
+                    "自动登录需要两步验证，请打开设置手动登录",
+                )
+                logger.info("Auto-login requires MFA, user notified")
+            elif self.settings_dialog:
+                self.settings_dialog.on_login_failed(error or "未知错误", need_mfa)
             logger.error(f"Login failed: {error}")
 
     def _on_chatroom_error(self, error: str) -> None:
@@ -253,10 +261,10 @@ class App:
 
     # ── Login / Logout ─────────────────────────────────────────
 
-    def do_login(self, username: str, password: str) -> None:
+    def do_login(self, username: str, password: str, mfa_code: str = "") -> None:
         """Perform login in a background thread."""
         def _login_thread():
-            result = auth_login(username, password)
+            result = auth_login(username, password, mfa_code)
             if result["success"]:
                 # Save credentials
                 self.config.account.username = username
@@ -266,10 +274,11 @@ class App:
                     logger.error(f"Password encryption failed: {e}")
                 cfg_module.save(self.config, self.config_path)
                 self.bridge.login_result.emit(
-                    True, result["api_key"], "")
+                    True, result["api_key"], "", False)
             else:
                 self.bridge.login_result.emit(
-                    False, "", result.get("error", "登录失败"))
+                    False, "", result.get("error", "登录失败"),
+                    result.get("need_mfa", False))
 
         threading.Thread(target=_login_thread, daemon=True).start()
 
