@@ -195,6 +195,9 @@ class App:
         self.app.screenAdded.connect(self._on_screens_changed)
         self.app.screenRemoved.connect(self._on_screens_changed)
 
+        # Sync auto-start registry state with config
+        self._sync_autostart_state()
+
         # Auto-login if credentials saved
         QTimer.singleShot(500, self.auto_login)
 
@@ -296,6 +299,25 @@ class App:
             self.settings_dialog.on_logout()
         if self.config.display.notify_login:
             self.notification_manager.show("弹幕鱼排", "已退出登录")
+
+    def _sync_autostart_state(self) -> None:
+        """Sync config.autostart with actual registry state.
+
+        If user manually deleted the registry entry or security software
+        cleared it, re-enable it. If config says off but registry has a
+        stale entry, clean it up.
+        """
+        try:
+            import autostart
+            reg_enabled = autostart.is_enabled()
+            if self.config.autostart and not reg_enabled:
+                logger.info("Config has autostart=True but registry missing, re-enabling")
+                autostart.enable()
+            elif not self.config.autostart and reg_enabled:
+                logger.info("Config has autostart=False but registry has entry, cleaning up")
+                autostart.disable()
+        except Exception as e:
+            logger.error(f"Failed to sync autostart state: {e}")
 
     def auto_login(self) -> None:
         """Attempt auto-login with saved credentials."""
@@ -580,6 +602,7 @@ class App:
         self.config.display.floating_card_scale = display_config.get("floatingCardScale", self.config.display.floating_card_scale)
         self.config.display.floating_font_scale = display_config.get("floatingFontScale", self.config.display.floating_font_scale)
         self.config.display.display_screen = display_config.get("displayScreen", self.config.display.display_screen)
+        self.config.autostart = display_config.get("autostart", self.config.autostart)
 
         cfg_module.save(self.config, self.config_path)
 
