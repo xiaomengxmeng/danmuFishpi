@@ -19,7 +19,7 @@ from config import Config, dpapi_encrypt, dpapi_decrypt
 logger = logging.getLogger("danmuFishpi.settings")
 
 APP_NAME = "弹幕鱼排"
-APP_VERSION = "1.0.3"
+APP_VERSION = "1.0.4"
 
 
 class ToggleSwitch(QWidget):
@@ -532,19 +532,25 @@ class SettingsDialog(QDialog):
         self.input_password.setEchoMode(QLineEdit.EchoMode.Password)
         layout.addWidget(self.input_password)
 
-        # 2FA 验证码输入框（默认隐藏，仅在服务器要求时显示）
-        self.lbl_mfa_hint = QLabel("账号已开启两步验证，请输入验证码后重新登录")
-        self.lbl_mfa_hint.setStyleSheet("color: #d29922; font-size: 12px; margin-top: 4px;")
+        # 2FA 验证码区域（默认隐藏，仅在服务器要求时显示）
+        self.lbl_mfa_hint = QLabel("🔒 账号已开启两步验证，请输入验证码后重新登录")
+        self.lbl_mfa_hint.setStyleSheet(
+            "color: #d29922; font-size: 11px; margin-top: 6px; padding: 6px 8px;"
+            "background: rgba(210, 153, 34, 0.08); border-radius: 4px;"
+        )
         self.lbl_mfa_hint.setWordWrap(True)
         self.lbl_mfa_hint.hide()
         layout.addWidget(self.lbl_mfa_hint)
 
-        layout.addWidget(self._field_label("两步验证码"))
+        self.lbl_mfa_field = self._field_label("两步验证码")
+        self.lbl_mfa_field.hide()
+        layout.addWidget(self.lbl_mfa_field)
         self.input_mfa = QLineEdit()
         self.input_mfa.setPlaceholderText("6 位数字验证码")
         self.input_mfa.setMaxLength(6)
         self.input_mfa.setEchoMode(QLineEdit.EchoMode.Password)
         self.input_mfa.hide()
+        self.input_mfa.returnPressed.connect(self._on_login)
         layout.addWidget(self.input_mfa)
 
         self.btn_login = QPushButton("登 录")
@@ -1177,6 +1183,7 @@ class SettingsDialog(QDialog):
         self._logged_in = True
         self.config.account.username = username
         self.lbl_mfa_hint.hide()
+        self.lbl_mfa_field.hide()
         self.input_mfa.hide()
         self.input_mfa.clear()
         self._update_login_state()
@@ -1187,13 +1194,14 @@ class SettingsDialog(QDialog):
         self.btn_login.setText("登 录")
         self.btn_login.setEnabled(True)
         if need_mfa:
-            self.lbl_mfa_hint.setText("账号已开启两步验证，请输入验证码后重新登录")
             self.lbl_mfa_hint.show()
+            self.lbl_mfa_field.show()
             self.input_mfa.show()
             self.input_mfa.clear()
             self.input_mfa.setFocus()
         else:
             self.lbl_mfa_hint.hide()
+            self.lbl_mfa_field.hide()
             self.input_mfa.hide()
             self.input_mfa.clear()
             QMessageBox.warning(self, "登录失败", error)
@@ -1203,6 +1211,7 @@ class SettingsDialog(QDialog):
         self.config.account.username = ""
         self.input_password.clear()
         self.lbl_mfa_hint.hide()
+        self.lbl_mfa_field.hide()
         self.input_mfa.hide()
         self.input_mfa.clear()
         self._update_login_state()
