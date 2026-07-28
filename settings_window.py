@@ -564,6 +564,16 @@ class SettingsDialog(QDialog):
         layout.addWidget(self.lbl_login_status)
 
         layout.addSpacing(16)
+        layout.addWidget(self._section_label("系统"))
+
+        # 开机自启开关
+        import autostart as autostart_module
+        autostart_enabled = autostart_module.is_enabled()
+        row_autostart, self.chk_autostart = self._toggle_row("开机自启", autostart_enabled)
+        self.chk_autostart.toggled.connect(self._on_autostart_toggled)
+        layout.addWidget(row_autostart)
+
+        layout.addSpacing(16)
         layout.addWidget(self._section_label("主题"))
         theme_group = QButtonGroup(self)
         theme_layout = QHBoxLayout()
@@ -918,6 +928,10 @@ class SettingsDialog(QDialog):
         self.input_hotkey.setText(self.config.hotkey or "f9")
         self.input_boss_key.setText(self.config.boss_key or "f10")
 
+        # 自启开关状态以注册表实际状态为准
+        import autostart as autostart_module
+        self.chk_autostart.setChecked(autostart_module.is_enabled())
+
     # ── Event Handlers ──────────────────────────────────────────
 
     def _on_login(self):
@@ -936,6 +950,24 @@ class SettingsDialog(QDialog):
 
     def _on_logout(self):
         self.logout_requested.emit()
+
+    def _on_autostart_toggled(self, checked: bool):
+        """Handle auto-start toggle. Operate registry first, save config only on success."""
+        import autostart as autostart_module
+        if checked:
+            if autostart_module.enable():
+                self._emit_config_save()
+            else:
+                # Rollback toggle, don't save config
+                self.chk_autostart.setChecked(False)
+                QMessageBox.warning(self, "设置失败", "设置开机自启失败，可能是权限不足")
+        else:
+            if autostart_module.disable():
+                self._emit_config_save()
+            else:
+                # Rollback toggle, don't save config
+                self.chk_autostart.setChecked(True)
+                QMessageBox.warning(self, "取消失败", "取消开机自启失败")
 
     def _on_theme_changed(self):
         theme = "dark" if self.btn_theme_dark.isChecked() else "light"
@@ -1051,6 +1083,7 @@ class SettingsDialog(QDialog):
             "fontScale": self.slider_font.value(),
             "fontFamily": self.combo_font.currentText().strip() or "Microsoft YaHei",
             "displayScreen": self.combo_screen.currentData(),
+            "autostart": self.chk_autostart.isChecked(),
         }
         self.config_saved.emit(display_config)
 
