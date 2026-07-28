@@ -112,6 +112,7 @@ class Config:
     hotkey: str = "f9"
     boss_key: str = "f10"
     theme: str = "light"               # dark | light
+    autostart: bool = False            # 开机自启
 
 
 # ── JSON (de)serialisation with camelCase keys ───────────────────
@@ -165,6 +166,7 @@ def config_to_dict(cfg: Config) -> dict:
     # Rename root fields
     d["hotkey"] = d.pop("hotkey", "f9")
     d["bossKey"] = d.pop("boss_key", "f10")
+    d["autostart"] = d.get("autostart", False)
     return d
 
 
@@ -277,6 +279,7 @@ def config_from_dict(d: dict) -> Config:
     cfg.hotkey = d.get("hotkey", "f9")
     cfg.boss_key = d.get("bossKey", "f10")
     cfg.theme = d.get("theme", "light")
+    cfg.autostart = d.get("autostart", False)
     return cfg
 
 
