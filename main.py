@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import QApplication
 import config as cfg_module
 import screen_utils
 from auth import login as auth_login
+from dedup import MessageDeduper
 from chatroom import Connection as ChatroomConnection
 from danmu_engine import DanmuEngine
 from overlay import DanmuOverlay
@@ -122,6 +123,11 @@ class App:
         # so that opening the settings dialog can show the MFA input directly
         self._mfa_pending = False
         self._mfa_password = ""  # decrypted password, cleared after use
+
+        # Global message deduper: shared across all Connection instances
+        # so that duplicate messages (e.g. from overlapping connections
+        # during re-login) are de-duped correctly.
+        self._deduper = MessageDeduper(capacity=1024)
 
         # 计算目标屏几何（位置/尺寸/基准像素都依赖它，必须先于创建后确定）
         cfg_module.set_target_screen(self.config.display.display_screen)
@@ -356,16 +362,34 @@ class App:
     # ── Chatroom ───────────────────────────────────────────────
 
     def start_chatroom(self, api_key: str) -> None:
-        """Start chatroom connection."""
+        """Start chatroom connection.
+
+        Ensures the old connection's thread has fully exited before
+        creating a new one, preventing two WebSocket connections from
+        receiving messages simultaneously (which causes duplicate
+        display because each had its own deduper).
+        """
         with self.conn_lock:
             if self.conn:
                 self.conn.stop()
+                # Wait for the old connection's thread to fully exit so
+                # its WebSocket callback stops firing before we create a
+                # new connection. The global deduper provides a safety net
+                # even if this times out.
+                if self.conn._thread and self.conn._thread.is_alive():
+                    self.conn._thread.join(timeout=5)
+                    if self.conn._thread.is_alive():
+                        logger.warning(
+                            "Old chatroom thread did not exit within 5s, "
+                            "proceeding anyway"
+                        )
 
             self.conn = ChatroomConnection(
                 api_key=api_key,
                 on_message=lambda msg: self.bridge.new_message.emit(msg),
                 on_error=lambda err: self.bridge.chatroom_error.emit(err),
                 on_status=self._on_chatroom_status,
+                deduper=self._deduper,
             )
             self.conn.start()
 

@@ -32,7 +32,8 @@ class Connection:
 
     def __init__(self, api_key: str, on_message: Callable[[dict], None],
                  on_error: Optional[Callable[[str], None]] = None,
-                 on_status: Optional[Callable[[bool], None]] = None):
+                 on_status: Optional[Callable[[bool], None]] = None,
+                 deduper: Optional[MessageDeduper] = None):
         self.api_key = api_key
         self.on_message = on_message
         self.on_error = on_error
@@ -44,10 +45,11 @@ class Connection:
         self._max_reconnect_delay = 60.0
         self._ws_url: Optional[str] = None
         self.is_connected = False
-        # De-dup by oId: survives across reconnects (same Connection
-        # instance) so server-replayed history after a reconnect is
-        # dropped instead of being displayed again.
-        self._deduper = MessageDeduper()
+        # De-dup by oId: a shared deduper survives across reconnects AND
+        # across Connection instances, so server-replayed history after a
+        # reconnect or re-login is dropped instead of being displayed again.
+        # When deduper is None (e.g. in tests), create a standalone one.
+        self._deduper = deduper if deduper is not None else MessageDeduper()
 
     def _set_connected(self, connected: bool) -> None:
         if self.is_connected != connected:
