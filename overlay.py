@@ -155,8 +155,11 @@ class DanmuOverlay(QWidget):
         self._last_tick_valid = False
         self.last_dt = FRAME_DT
 
-        # Pre-rendered pixmaps cache for scrolling items
-        self._pixmaps: dict[int, QPixmap] = {}  # id(item) -> QPixmap
+        # Pixmap cache is stored directly on each DanmuItem (item.pixmap).
+        # The previous id(item)-keyed dict caused visual duplication when
+        # Python reused a garbage-collected item's memory address for a new
+        # item, returning the stale pixmap. Per-item storage eliminates this
+        # bug and avoids unbounded dict growth.
 
         # Async image cache for avatars and inline images
         self._image_cache = ImageCache(self)
@@ -173,9 +176,20 @@ class DanmuOverlay(QWidget):
             self._anim_clock.start()
             self._anim_clock_started = True
 
+    def _invalidate_pixmaps(self) -> None:
+        """Clear cached pixmaps on all active scrolling items.
+
+        Called when images load, config changes, or screen DPI changes —
+        anything that would make a previously rendered pixmap stale.
+        """
+        for item in self.engine.scroll_items:
+            item.pixmap = None
+        for item in self.engine.queued_items:
+            item.pixmap = None
+
     def _on_image_loaded(self, url: str) -> None:
         """Invalidate scrolling pixmap cache when any image finishes loading."""
-        self._pixmaps.clear()
+        self._invalidate_pixmaps()
         # If the new image is a GIF, start the animation clock
         if self._image_cache.is_animated(url):
             self._start_anim_clock()
@@ -197,7 +211,7 @@ class DanmuOverlay(QWidget):
         self.theme = THEME_LIGHT if theme == "light" else THEME_DARK
         self.show_outline = display_config.get("showOutline", True)
         # Clear pixmap cache (font/size changed)
-        self._pixmaps.clear()
+        self._invalidate_pixmaps()
         self._has_animated_content = False
         self.update()
 
@@ -227,7 +241,7 @@ class DanmuOverlay(QWidget):
             return
         self.font_metrics = QFontMetrics(self.font, self)
         self._metrics_screen = current
-        self._pixmaps.clear()
+        self._invalidate_pixmaps()
         self.update()
 
     def set_click_through(self, enable: bool) -> None:
@@ -896,9 +910,8 @@ class DanmuOverlay(QWidget):
                     break
 
         if not has_gif:
-            cached = self._pixmaps.get(id(item))
-            if cached is not None:
-                return cached
+            if item.pixmap is not None:
+                return item.pixmap
 
         item.width = float(lay.content_w)
         item.height = float(lay.total_h)
@@ -956,7 +969,7 @@ class DanmuOverlay(QWidget):
             p.end()
 
         if not has_gif:
-            self._pixmaps[id(item)] = target_pm
+            item.pixmap = target_pm
         return target_pm
 
     def _draw_text_wrapped(self, painter: QPainter, text: str,
@@ -1331,7 +1344,6 @@ class DanmuOverlay(QWidget):
     def clear_all(self) -> None:
         """Clear all danmu."""
         self.engine.clear_all()
-        self._pixmaps.clear()
         self._has_animated_content = False
         self.update()
 
