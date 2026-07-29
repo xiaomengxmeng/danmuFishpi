@@ -142,24 +142,26 @@ class Connection:
             msg_type = msg.get("type", "")
             nickname = msg.get("userNickname") or msg.get("userName", "")
             content = msg.get("content", "")[:60]
-
-            # De-dup by oId: the server replays recent history after a
-            # reconnect; drop messages we have already seen. The deduper
-            # is NOT reset on reconnect, so replayed oIds are recognized.
             oId = msg.get("oId")
-            if oId is not None and not self._deduper.check_and_record(oId):
-                logger.debug(
-                    f"Dedup skip oId={oId} type={msg_type} "
-                    f"from={nickname}: {content}"
-                )
-                return
+
+            # Only de-dup on 'msg' type. Other types (revoke,
+            # redPacketStatus, online, etc.) may carry an oId that
+            # refers to another message, not their own identity.
+            # Dedup-ing on those would falsely block the real message.
+            if msg_type == "msg" and oId is not None:
+                if not self._deduper.check_and_record(oId):
+                    logger.debug(
+                        f"Dedup skip oId={oId} type={msg_type} "
+                        f"from={nickname}: {content}"
+                    )
+                    return
 
             processed = process_message(msg)
             if processed:
-                logger.info(f"Recv msg type={msg_type} from={nickname}: {content}")
+                logger.info(f"Recv msg type={msg_type} oId={oId} from={nickname}: {content}")
                 self.on_message(processed)
             else:
-                logger.debug(f"Filtered msg type={msg_type} from={nickname}: {content}")
+                logger.debug(f"Filtered msg type={msg_type} oId={oId} from={nickname}: {content}")
         except json.JSONDecodeError:
             logger.warning(f"Invalid JSON: {raw_data[:100]}")
         except Exception as e:
