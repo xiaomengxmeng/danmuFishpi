@@ -15,11 +15,9 @@ from PyQt6.QtWidgets import (
 )
 
 from config import Config, dpapi_encrypt, dpapi_decrypt
+from version import APP_NAME, APP_VERSION
 
 logger = logging.getLogger("danmuFishpi.settings")
-
-APP_NAME = "弹幕鱼排"
-APP_VERSION = "1.0.5"
 
 
 class ToggleSwitch(QWidget):
