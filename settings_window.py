@@ -11,7 +11,7 @@ from PyQt6.QtGui import QFont, QPainter, QColor, QPen, QBrush
 from PyQt6.QtWidgets import (
     QApplication, QDialog, QVBoxLayout, QHBoxLayout, QWidget, QLabel, QLineEdit,
     QPushButton, QSlider, QCheckBox, QButtonGroup, QComboBox, QMessageBox,
-    QFrame, QSizePolicy, QTextEdit, QScrollArea,
+    QFrame, QSizePolicy, QTextEdit, QScrollArea, QColorDialog,
 )
 
 from config import Config, dpapi_encrypt, dpapi_decrypt
@@ -438,7 +438,7 @@ class SettingsDialog(QDialog):
         tab_layout.setContentsMargins(0, 0, 0, 0)
         tab_layout.setSpacing(0)
         self.tab_buttons = {}
-        for tab_id, label in [("account", "账号"), ("display", "显示"), ("hotkey", "热键"), ("block_follow", "屏蔽/关注")]:
+        for tab_id, label in [("account", "账号"), ("display", "显示"), ("hotkey", "热键"), ("block_follow", "屏蔽/关注"), ("user_colors", "弹幕颜色")]:
             btn = QPushButton(label)
             btn.setCheckable(True)
             btn.setAutoExclusive(True)
@@ -469,6 +469,7 @@ class SettingsDialog(QDialog):
         self._build_display_panel()
         self._build_hotkey_tab()
         self._build_block_follow_panel()
+        self._build_user_colors_panel()
 
         # Footer
         footer = QWidget()
@@ -870,6 +871,8 @@ class SettingsDialog(QDialog):
             self.content_layout.addWidget(self.panel_hotkey)
         elif tab_id == "block_follow":
             self.content_layout.addWidget(self.panel_block_follow)
+        elif tab_id == "user_colors":
+            self.content_layout.addWidget(self.panel_user_colors)
 
     # ── Form Population ─────────────────────────────────────────
 
@@ -931,6 +934,17 @@ class SettingsDialog(QDialog):
 
         self.input_hotkey.setText(self.config.hotkey or "f9")
         self.input_boss_key.setText(self.config.boss_key or "f10")
+
+        # 弹幕颜色行（重新构建，避免重复连接信号）
+        while self.user_colors_layout.count():
+            item = self.user_colors_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        self.user_color_rows.clear()
+        for uid, color in (self.config.display.user_colors or {}).items():
+            self._add_user_color_row(uid=uid, color=color)
+        if not self.user_color_rows:
+            self._add_user_color_row()
 
         # 自启开关状态以注册表实际状态为准
         import autostart as autostart_module
@@ -1039,6 +1053,102 @@ class SettingsDialog(QDialog):
         layout.addStretch()
         self.panel_block_follow = panel
 
+    # ── 弹幕颜色（按用户设置） ────────────────────────────────
+
+    def _build_user_colors_panel(self):
+        """Build the per-user danmu color management tab."""
+        panel = QWidget()
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(14)
+        layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+
+        layout.addWidget(self._section_label("弹幕颜色"))
+        hint = QLabel("为指定用户设置弹幕颜色；其余用户弹幕颜色跟随主题默认。\n用户 ID 填写鱼排用户名（userName），修改后立即生效。")
+        hint.setObjectName("hintLabel")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        self.user_color_rows = []  # [{"edit": QLineEdit, "btn": QPushButton, "row": QWidget}]
+        self.user_colors_layout = QVBoxLayout()
+        self.user_colors_layout.setSpacing(8)
+        layout.addLayout(self.user_colors_layout)
+
+        btn_add = QPushButton("＋ 添加用户")
+        btn_add.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_add.clicked.connect(lambda: self._add_user_color_row())
+        layout.addWidget(btn_add)
+
+        layout.addStretch()
+        self.panel_user_colors = panel
+
+    def _default_user_color(self) -> str:
+        return "#1f2328" if self.config.theme == "light" else "#e6edf3"
+
+    def _add_user_color_row(self, uid: str = "", color: str = ""):
+        """Append one user-color row; returns nothing (stored in self)."""
+        if not color:
+            color = self._default_user_color()
+        row = QWidget()
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setSpacing(8)
+
+        edit = QLineEdit()
+        edit.setPlaceholderText("用户 ID")
+        edit.setText(uid)
+        edit.setMinimumWidth(160)
+        edit.textChanged.connect(self._emit_config_save)
+        row_layout.addWidget(edit, stretch=1)
+
+        btn = QPushButton()
+        btn.setFixedSize(48, 28)
+        btn.setToolTip("点击选择弹幕颜色")
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._style_color_button(btn, color)
+        btn.clicked.connect(lambda: self._pick_user_color(btn))
+        row_layout.addWidget(btn)
+
+        btn_del = QPushButton("删除")
+        btn_del.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_del.clicked.connect(lambda: self._remove_user_color_row(row))
+        row_layout.addWidget(btn_del)
+
+        self.user_colors_layout.addWidget(row)
+        self.user_color_rows.append({"edit": edit, "btn": btn, "row": row})
+
+    def _style_color_button(self, btn: QPushButton, hex_color: str):
+        btn.setProperty("color", hex_color)
+        btn.setStyleSheet(
+            f"background-color: {hex_color}; border: 1px solid #555555; border-radius: 4px;"
+        )
+
+    def _pick_user_color(self, btn: QPushButton):
+        current = str(btn.property("color") or self._default_user_color())
+        color = QColorDialog.getColor(QColor(current), self, "选择弹幕颜色")
+        if color.isValid():
+            self._style_color_button(btn, color.name())  # #rrggbb
+            self._emit_config_save()
+
+    def _remove_user_color_row(self, row: QWidget):
+        for i, rec in enumerate(self.user_color_rows):
+            if rec["row"] is row:
+                self.user_color_rows.pop(i)
+                break
+        self.user_colors_layout.removeWidget(row)
+        row.deleteLater()
+        self._emit_config_save()
+
+    def _collect_user_colors(self) -> dict:
+        """Collect valid {user_id: #rrggbb} pairs from the color rows."""
+        out: dict[str, str] = {}
+        for rec in self.user_color_rows:
+            uid = rec["edit"].text().strip()
+            color = str(rec["btn"].property("color") or "").strip()
+            if uid and color:
+                out[uid] = color
+        return out
+
     def _emit_config_save(self):
         area_map = {0: "fullscreen", 1: "top25", 2: "topHalf", 3: "bottomHalf", 4: "bottom25"}
         area = area_map.get(self.combo_area.currentIndex(), "fullscreen")
@@ -1057,6 +1167,7 @@ class SettingsDialog(QDialog):
 
         blocked_ids = [s.strip() for s in self.text_blocked_ids.toPlainText().splitlines() if s.strip()]
         followed_ids = [s.strip() for s in self.text_followed_ids.toPlainText().splitlines() if s.strip()]
+        user_colors = self._collect_user_colors()
 
         display_config = {
             "danmuMode": mode,
@@ -1088,6 +1199,7 @@ class SettingsDialog(QDialog):
             "fontFamily": self.combo_font.currentText().strip() or "Microsoft YaHei",
             "displayScreen": self.combo_screen.currentData(),
             "autostart": self.chk_autostart.isChecked(),
+            "userColors": user_colors,
         }
         self.config_saved.emit(display_config)
 

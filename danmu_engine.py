@@ -21,6 +21,7 @@ class DanmuItem:
     content: str          # May contain HTML (e.g. <img> tags)
     has_image: bool
     is_red_packet: bool = False
+    color: Optional[str] = None   # 用户自定义弹幕颜色 (#RRGGBB)，None = 跟随主题默认色
 
     # Scrolling mode fields
     track_index: int = -1
@@ -66,6 +67,7 @@ class DanmuEngine:
         self.max_message_lines: int = 3
         self.opacity: int = 100
         self.top_margin: int = 0
+        self.user_colors: dict[str, str] = {}  # 用户ID -> 弹幕颜色(#RRGGBB)
 
         # Floating mode settings
         self.floating_dwell_seconds: float = 8.0   # lifetime of each card (s)
@@ -115,6 +117,9 @@ class DanmuEngine:
         self.max_message_lines = display_config.get("maxMessageLines", self.max_message_lines)
         self.opacity = display_config.get("danmuOpacity", self.opacity)
         self.top_margin = display_config.get("topMargin", self.top_margin)
+        user_colors = display_config.get("userColors")
+        if isinstance(user_colors, dict):
+            self.user_colors = user_colors
 
         self.floating_dwell_seconds = display_config.get("floatingDwellSeconds", self.floating_dwell_seconds)
         self.floating_max_items = display_config.get("floatingMaxItems", self.floating_max_items)
@@ -266,6 +271,10 @@ class DanmuEngine:
             is_red_packet=msg.get("is_red_packet", False),
             add_time=time.time(),
         )
+        # 彩色弹幕：按 user_id（缺省回退 nickname）查用户自定义颜色
+        uid = msg.get("user_id") or msg.get("nickname", "")
+        if uid:
+            item.color = self.user_colors.get(uid)
 
         logger.info(f"Engine add message from={item.nickname}: {item.content[:40]}")
 

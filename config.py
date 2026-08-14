@@ -7,6 +7,7 @@ Password is encrypted with Windows DPAPI (via ctypes) and base64-encoded.
 import base64
 import json
 import os
+import re
 import ctypes
 from ctypes import wintypes
 from dataclasses import dataclass, asdict, field
@@ -103,6 +104,7 @@ class Display:
     floating_font_scale: float = 100.0   # 浮动卡片字号百分比 (100 = 1.0x)
     display_screen: int = -1             # -1 = primary screen; else index into QApplication.screens()
     legacy_pixels: dict = field(default_factory=dict)  # 旧版绝对px迁移暂存
+    user_colors: dict[str, str] = field(default_factory=dict)  # 用户ID -> 弹幕颜色(#RRGGBB)，其余用户跟随主题默认色
 
 
 @dataclass
@@ -162,6 +164,7 @@ def config_to_dict(cfg: Config) -> dict:
         "floatingCardScale": disp["floating_card_scale"],
         "floatingFontScale": disp["floating_font_scale"],
         "displayScreen": disp["display_screen"],
+        "userColors": disp["user_colors"],
     }
     # Rename root fields
     d["hotkey"] = d.pop("hotkey", "f9")
@@ -215,6 +218,29 @@ def _coerce_floating_font_scale(disp) -> float:
     if fs <= 3.0:
         fs = min(100.0, fs * 100.0)
     return max(20.0, min(100.0, fs))
+
+
+_HEX_COLOR_RE = re.compile(r"^#?([0-9a-fA-F]{6})$")
+
+
+def _coerce_user_colors(raw) -> dict:
+    """Read userColors, keeping only valid #RRGGBB entries.
+
+    Keys are trimmed; colors are normalised to lowercase #rrggbb. Invalid
+    entries are dropped; anything that is not a dict yields an empty map.
+    """
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, str] = {}
+    for key, val in raw.items():
+        uid = str(key).strip()
+        if not uid:
+            continue
+        m = _HEX_COLOR_RE.match(str(val).strip())
+        if not m:
+            continue
+        out[uid] = "#" + m.group(1).lower()
+    return out
 
 
 def config_from_dict(d: dict) -> Config:
@@ -275,6 +301,7 @@ def config_from_dict(d: dict) -> Config:
         floating_font_scale=_coerce_floating_font_scale(disp),
         display_screen=disp.get("displayScreen", -1),
         legacy_pixels=legacy_pixels,
+        user_colors=_coerce_user_colors(disp.get("userColors")),
     )
     cfg.hotkey = d.get("hotkey", "f9")
     cfg.boss_key = d.get("bossKey", "f10")

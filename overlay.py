@@ -263,6 +263,19 @@ class DanmuOverlay(QWidget):
     def _nickname_color(self) -> QColor:
         return self.theme["text"] if self.engine.simple_mode else self.theme["nickname"]
 
+    def _danmu_text_color(self, item) -> QColor:
+        """Resolve the danmu content color for an item.
+
+        A user-configured color (item.color, #RRGGBB) wins when valid;
+        otherwise fall back to the red-packet color or the theme default
+        text color ("跟随系统").
+        """
+        if item.color:
+            c = QColor(item.color)
+            if c.isValid():
+                return c
+        return self.theme["red_packet"] if item.is_red_packet else self.theme["text"]
+
     def toggle_visibility(self) -> None:
         """Toggle danmu visibility on/off."""
         self.visible_flag = not self.visible_flag
@@ -932,7 +945,7 @@ class DanmuOverlay(QWidget):
             line_h = self.font_metrics.height()
             line_gap = 4
             ascent = self.font_metrics.ascent()
-            text_color = self.theme["red_packet"] if item.is_red_packet else self.theme["text"]
+            text_color = self._danmu_text_color(item)
             nick_color = self._nickname_color()
             show_avatar = self._effective_show_avatar() and bool(item.nickname)
 
@@ -1288,7 +1301,7 @@ class DanmuOverlay(QWidget):
 
         # 3. Content text (below nickname)
         text_y = cur_y + content_fm.ascent()
-        content_color = self.theme["red_packet"] if item.is_red_packet else self.theme["text"]
+        content_color = self._danmu_text_color(item)
         painter.setPen(QPen(content_color))
         painter.setFont(content_font)
         self._draw_text_block(painter, content_lines, content_x, text_y, content_color, content_fm, line_gap)
