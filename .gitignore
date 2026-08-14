@@ -5,6 +5,7 @@ venv/
 *.egg-info/
 dist/
 build/
+.pytest_cache/
 .env
 config.json
 *.spec
