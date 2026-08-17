@@ -625,6 +625,26 @@ class SettingsDialog(QDialog):
         elements_grid.addWidget(row_avatar)
         row_nick, self.chk_nickname = self._toggle_row("昵称", True)
         elements_grid.addWidget(row_nick)
+        # 默认昵称颜色（留空=跟随主题；设置了弹幕颜色的用户昵称跟随其颜色）
+        row_nick_color = QWidget()
+        nick_color_layout = QHBoxLayout(row_nick_color)
+        nick_color_layout.setContentsMargins(0, 0, 0, 0)
+        nick_color_layout.setSpacing(8)
+        lbl_nick_color = QLabel("昵称颜色")
+        lbl_nick_color.setProperty("class", "fieldLabel")
+        nick_color_layout.addWidget(lbl_nick_color)
+        nick_color_layout.addStretch(1)
+        self.btn_nickname_color = QPushButton()
+        self.btn_nickname_color.setFixedSize(48, 28)
+        self.btn_nickname_color.setToolTip("默认昵称颜色；设置了弹幕颜色的用户昵称跟随其颜色")
+        self.btn_nickname_color.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_nickname_color.clicked.connect(self._pick_nickname_color)
+        nick_color_layout.addWidget(self.btn_nickname_color)
+        btn_nick_color_reset = QPushButton("跟随主题")
+        btn_nick_color_reset.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_nick_color_reset.clicked.connect(self._reset_nickname_color)
+        nick_color_layout.addWidget(btn_nick_color_reset)
+        elements_grid.addWidget(row_nick_color)
         row_img, self.chk_image = self._toggle_row("图片", True)
         elements_grid.addWidget(row_img)
         row_rp, self.chk_red_packet = self._toggle_row("红包", True)
@@ -946,6 +966,14 @@ class SettingsDialog(QDialog):
         if not self.user_color_rows:
             self._add_user_color_row()
 
+        # 默认昵称颜色（空=跟随主题）
+        nick_color = self.config.display.nickname_color or ""
+        if nick_color:
+            self._style_color_button(self.btn_nickname_color, nick_color)
+        else:
+            self._style_color_button(self.btn_nickname_color, self._default_user_color())
+            self.btn_nickname_color.setProperty("color", "")
+
         # 自启开关状态以注册表实际状态为准
         import autostart as autostart_module
         self.chk_autostart.setChecked(autostart_module.is_enabled())
@@ -1130,6 +1158,20 @@ class SettingsDialog(QDialog):
             self._style_color_button(btn, color.name())  # #rrggbb
             self._emit_config_save()
 
+    def _pick_nickname_color(self):
+        """Pick the global default nickname color (empty = follow theme)."""
+        current = str(self.btn_nickname_color.property("color") or self._default_user_color())
+        color = QColorDialog.getColor(QColor(current), self, "选择默认昵称颜色")
+        if color.isValid():
+            self._style_color_button(self.btn_nickname_color, color.name())
+            self._emit_config_save()
+
+    def _reset_nickname_color(self):
+        """Clear the default nickname color so it follows the theme again."""
+        self._style_color_button(self.btn_nickname_color, self._default_user_color())
+        self.btn_nickname_color.setProperty("color", "")
+        self._emit_config_save()
+
     def _remove_user_color_row(self, row: QWidget):
         for i, rec in enumerate(self.user_color_rows):
             if rec["row"] is row:
@@ -1200,6 +1242,7 @@ class SettingsDialog(QDialog):
             "displayScreen": self.combo_screen.currentData(),
             "autostart": self.chk_autostart.isChecked(),
             "userColors": user_colors,
+            "nicknameColor": str(self.btn_nickname_color.property("color") or ""),
         }
         self.config_saved.emit(display_config)
 

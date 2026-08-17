@@ -143,6 +143,7 @@ class DanmuOverlay(QWidget):
         self.click_through = True
         self.visible_flag = True  # Toggle danmu visibility
         self.show_outline = True  # Text outline effect
+        self.nickname_color: str = ""  # 默认昵称颜色(#RRGGBB)，空=跟随主题默认
 
         # Animation timer
         self.timer = QTimer(self)
@@ -210,6 +211,7 @@ class DanmuOverlay(QWidget):
             self._metrics_screen = None
         self.theme = THEME_LIGHT if theme == "light" else THEME_DARK
         self.show_outline = display_config.get("showOutline", True)
+        self.nickname_color = display_config.get("nicknameColor") or ""
         # Clear pixmap cache (font/size changed)
         self._invalidate_pixmaps()
         self._has_animated_content = False
@@ -260,7 +262,21 @@ class DanmuOverlay(QWidget):
     def _effective_show_image(self) -> bool:
         return self.engine.show_image and not self.engine.simple_mode
 
-    def _nickname_color(self) -> QColor:
+    def _nickname_color(self, item) -> QColor:
+        """Resolve the nickname color for an item.
+
+        Priority: per-user danmu color (nickname matches the danmu color) >
+        configurable default nickname color > theme default (follows the text
+        color in simple mode).
+        """
+        if item is not None and item.color:
+            c = QColor(item.color)
+            if c.isValid():
+                return c
+        if self.nickname_color:
+            c = QColor(self.nickname_color)
+            if c.isValid():
+                return c
         return self.theme["text"] if self.engine.simple_mode else self.theme["nickname"]
 
     def _danmu_text_color(self, item) -> QColor:
@@ -946,7 +962,7 @@ class DanmuOverlay(QWidget):
             line_gap = 4
             ascent = self.font_metrics.ascent()
             text_color = self._danmu_text_color(item)
-            nick_color = self._nickname_color()
+            nick_color = self._nickname_color(item)
             show_avatar = self._effective_show_avatar() and bool(item.nickname)
 
             avatar_drawn = False
@@ -1294,7 +1310,7 @@ class DanmuOverlay(QWidget):
 
         # 2. Nickname (below avatar)
         if self.engine.show_nickname and item.nickname:
-            painter.setPen(QPen(self._nickname_color()))
+            painter.setPen(QPen(self._nickname_color(item)))
             painter.setFont(nick_font)
             painter.drawText(int(content_x), int(cur_y + nick_fm.ascent()), item.nickname)
             cur_y += nick_fm.height() + nick_gap

@@ -551,6 +551,7 @@ class App:
             "floatingCardWidth": max(80, int(round(base["floating_card_width"] * d.floating_card_scale))),
             "floatingFontSize": max(8, int(round(base["floating_font_size"] * d.floating_font_scale / 100.0))),
             "userColors": d.user_colors,
+            "nicknameColor": d.nickname_color,
         }
 
     def _migrate_legacy_pixels(self) -> None:
@@ -654,6 +655,7 @@ class App:
         self.config.display.floating_font_scale = display_config.get("floatingFontScale", self.config.display.floating_font_scale)
         self.config.display.display_screen = display_config.get("displayScreen", self.config.display.display_screen)
         self.config.display.user_colors = display_config.get("userColors", self.config.display.user_colors)
+        self.config.display.nickname_color = display_config.get("nicknameColor", self.config.display.nickname_color)
         self.config.autostart = display_config.get("autostart", self.config.autostart)
 
         cfg_module.save(self.config, self.config_path)

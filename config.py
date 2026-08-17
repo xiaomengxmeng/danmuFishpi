@@ -105,6 +105,7 @@ class Display:
     display_screen: int = -1             # -1 = primary screen; else index into QApplication.screens()
     legacy_pixels: dict = field(default_factory=dict)  # 旧版绝对px迁移暂存
     user_colors: dict[str, str] = field(default_factory=dict)  # 用户ID -> 弹幕颜色(#RRGGBB)，其余用户跟随主题默认色
+    nickname_color: str = ""             # 默认昵称颜色(#RRGGBB)，空=跟随主题默认
 
 
 @dataclass
@@ -165,6 +166,7 @@ def config_to_dict(cfg: Config) -> dict:
         "floatingFontScale": disp["floating_font_scale"],
         "displayScreen": disp["display_screen"],
         "userColors": disp["user_colors"],
+        "nicknameColor": disp["nickname_color"],
     }
     # Rename root fields
     d["hotkey"] = d.pop("hotkey", "f9")
@@ -243,6 +245,19 @@ def _coerce_user_colors(raw) -> dict:
     return out
 
 
+def _coerce_nickname_color(raw) -> str:
+    """Read nicknameColor, keeping only a valid #RRGGBB value.
+
+    Invalid/non-string values yield "" (= follow the theme default).
+    """
+    if not isinstance(raw, str):
+        return ""
+    m = _HEX_COLOR_RE.match(raw.strip())
+    if not m:
+        return ""
+    return "#" + m.group(1).lower()
+
+
 def config_from_dict(d: dict) -> Config:
     """Build a Config from a camelCase JSON dict, filling defaults."""
     cfg = Config()
@@ -302,6 +317,7 @@ def config_from_dict(d: dict) -> Config:
         display_screen=disp.get("displayScreen", -1),
         legacy_pixels=legacy_pixels,
         user_colors=_coerce_user_colors(disp.get("userColors")),
+        nickname_color=_coerce_nickname_color(disp.get("nicknameColor")),
     )
     cfg.hotkey = d.get("hotkey", "f9")
     cfg.boss_key = d.get("bossKey", "f10")
