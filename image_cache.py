@@ -30,6 +30,10 @@ _GIF_MAGIC = (b"GIF89a", b"GIF87a")
 _MAX_CACHE_BYTES = 800 * 1024 * 1024
 _MAX_CACHE_FILES = 50000
 
+# All cache file suffixes (files store raw image bytes; the extension is
+# cosmetic and reflects the real format so they can be opened directly).
+_CACHE_EXTS = (".png", ".jpg", ".gif", ".img")
+
 _CACHE_SUBDIR = os.path.join("DanmuFishpi", "img_cache")
 
 
@@ -44,9 +48,36 @@ def default_cache_dir() -> str:
     return os.path.join(appdata, _CACHE_SUBDIR)
 
 
-def _cache_path(cache_dir: str, url: str) -> str:
-    """Disk file path for a URL inside the cache directory."""
-    return os.path.join(cache_dir, _hash_url(url) + ".img")
+def _cache_path(cache_dir: str, url: str, ext: str = ".img") -> str:
+    """Disk file path for a URL inside the cache directory.
+
+    Files store raw image bytes (PNG/JPEG/GIF); QPixmap.loadFromData detects
+    the real format from the bytes, so the extension is cosmetic. Persisting
+    uses the real format extension so cached files are clearly not disc
+    images and can be opened directly.
+    """
+    return os.path.join(cache_dir, _hash_url(url) + ext)
+
+
+def _sniff_ext(raw: bytes) -> str:
+    """Best-effort extension from the image magic bytes."""
+    if raw[:6] in _GIF_MAGIC:
+        return ".gif"
+    if raw[:8] == b"\x89PNG\r\n\x1a\n":
+        return ".png"
+    if raw[:3] == b"\xff\xd8\xff":
+        return ".jpg"
+    return ".img"
+
+
+def _find_cache_path(cache_dir: str, url: str) -> str | None:
+    """Return the existing disk path for a URL (any known extension)."""
+    base = os.path.join(cache_dir, _hash_url(url))
+    for ext in _CACHE_EXTS:
+        p = base + ext
+        if os.path.exists(p):
+            return p
+    return None
 
 
 def _prune(cache_dir: str, total_bytes: int,
@@ -60,7 +91,7 @@ def _prune(cache_dir: str, total_bytes: int,
     entries = []
     try:
         for name in os.listdir(cache_dir):
-            if not name.endswith(".img"):
+            if not name.endswith(_CACHE_EXTS):
                 continue
             p = os.path.join(cache_dir, name)
             try:
@@ -143,16 +174,11 @@ class ImageCache(QObject):
 
     # ---- Disk cache helpers ----
 
-    def _disk_path(self, url: str) -> str | None:
-        if not self._disk_enabled:
-            return None
-        return _cache_path(self._cache_dir, url)
-
     def _scan_total_bytes(self) -> int:
         total = 0
         try:
             for name in os.listdir(self._cache_dir):
-                if not name.endswith(".img"):
+                if not name.endswith(_CACHE_EXTS):
                     continue
                 try:
                     total += os.path.getsize(os.path.join(self._cache_dir, name))
@@ -168,12 +194,12 @@ class ImageCache(QObject):
         Returns True on success. Corrupted files are removed so the caller
         falls through to a fresh download.
         """
-        path = self._disk_path(url)
+        if not self._disk_enabled:
+            return False
+        path = _find_cache_path(self._cache_dir, url)
         if path is None:
             return False
         try:
-            if not os.path.exists(path):
-                return False
             with open(path, "rb") as f:
                 raw = f.read()
             if _is_gif(raw):
@@ -199,17 +225,29 @@ class ImageCache(QObject):
             return False
 
     def _persist(self, url: str, raw: bytes) -> None:
-        """Atomically write raw bytes to disk, evicting when over the cap."""
+        """Atomically write raw bytes to disk, evicting when over the cap.
+
+        The file is named with the real image format extension so cached
+        images can be opened directly. Sibling files with other extensions
+        for the same URL (e.g. legacy .img entries) are removed.
+        """
         if not self._disk_enabled:
             return
-        path = self._disk_path(url)
-        if path is None:
-            return
+        ext = _sniff_ext(raw)
+        path = _cache_path(self._cache_dir, url, ext)
         try:
             tmp = path + ".tmp"
             with open(tmp, "wb") as f:
                 f.write(raw)
             os.replace(tmp, path)
+            for other in _CACHE_EXTS:
+                if other != ext:
+                    sibling = _cache_path(self._cache_dir, url, other)
+                    try:
+                        if os.path.exists(sibling):
+                            os.remove(sibling)
+                    except OSError:
+                        pass
             if self._total_bytes is None:
                 self._total_bytes = self._scan_total_bytes()
             self._total_bytes += len(raw)
@@ -267,7 +305,7 @@ class ImageCache(QObject):
             return
         try:
             for name in os.listdir(self._cache_dir):
-                if name.endswith(".img") or name.endswith(".tmp"):
+                if name.endswith(_CACHE_EXTS) or name.endswith(".tmp"):
                     try:
                         os.remove(os.path.join(self._cache_dir, name))
                     except OSError:

@@ -34,9 +34,9 @@ def workdir():
 
 
 def test_disk_hit_loads_without_network(app, workdir):
-    """A file already on disk is decoded without starting a download."""
+    """A file already on disk (real format ext) is decoded without a download."""
     cache = ImageCache(cache_dir=workdir)
-    path = _cache_path(workdir, _URL)
+    path = _cache_path(workdir, _URL, ".png")
     with open(path, "wb") as f:
         f.write(_PNG)
     pm = cache.get(_URL)
@@ -45,10 +45,20 @@ def test_disk_hit_loads_without_network(app, workdir):
     assert _URL in cache._cache
 
 
+def test_legacy_img_ext_still_found(app, workdir):
+    """Old .img-named cache files from earlier versions are still reused."""
+    cache = ImageCache(cache_dir=workdir)
+    path = _cache_path(workdir, _URL, ".img")
+    with open(path, "wb") as f:
+        f.write(_PNG)
+    assert cache.get(_URL) is not None
+    assert _URL not in cache._pending
+
+
 def test_corrupted_file_is_removed_and_download_started(app, workdir):
     """Garbage bytes -> file deleted, falls through to download."""
     cache = ImageCache(cache_dir=workdir)
-    path = _cache_path(workdir, _URL)
+    path = _cache_path(workdir, _URL, ".png")
     with open(path, "wb") as f:
         f.write(b"not an image at all")
     pm = cache.get(_URL)
@@ -65,10 +75,10 @@ def test_missing_file_starts_download(app, workdir):
 
 def test_clear_disk_cache_removes_files(app, workdir):
     cache = ImageCache(cache_dir=workdir)
-    with open(_cache_path(workdir, _URL), "wb") as f:
+    with open(_cache_path(workdir, _URL, ".png"), "wb") as f:
         f.write(_PNG)
     cache.clear_disk_cache()
-    assert not os.path.exists(_cache_path(workdir, _URL))
+    assert not os.path.exists(_cache_path(workdir, _URL, ".png"))
 
 
 def test_disk_disabled_degrades_to_memory(app, workdir):
