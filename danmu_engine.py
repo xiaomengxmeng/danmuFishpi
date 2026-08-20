@@ -22,6 +22,7 @@ class DanmuItem:
     has_image: bool
     is_red_packet: bool = False
     color: Optional[str] = None   # 用户自定义弹幕颜色 (#RRGGBB)，None = 跟随主题默认色
+    layout: object = None         # overlay 计算的布局缓存（ScrollLayout / 卡片布局 dict），失效时清空
 
     # Scrolling mode fields
     track_index: int = -1

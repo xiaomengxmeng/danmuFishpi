@@ -178,19 +178,39 @@ class DanmuOverlay(QWidget):
             self._anim_clock_started = True
 
     def _invalidate_pixmaps(self) -> None:
-        """Clear cached pixmaps on all active scrolling items.
+        """Clear cached pixmaps + layouts on ALL items (full invalidation).
 
-        Called when images load, config changes, or screen DPI changes —
-        anything that would make a previously rendered pixmap stale.
+        Only used for genuinely global changes: config/theme updates, screen
+        or DPI changes. Image loads use the targeted
+        _invalidate_items_with_url() instead so a single download does not
+        force a full re-layout/re-render of every danmu.
         """
         for item in self.engine.scroll_items:
             item.pixmap = None
+            item.layout = None
         for item in self.engine.queued_items:
             item.pixmap = None
+            item.layout = None
+        for item in self.engine.float_items:
+            item.layout = None
+
+    def _invalidate_items_with_url(self, url: str) -> None:
+        """Invalidate only items that reference the given URL (avatar/content)."""
+        for item in self.engine.scroll_items:
+            if item.avatar_url == url or (item.content and url in item.content):
+                item.pixmap = None
+                item.layout = None
+        for item in self.engine.queued_items:
+            if item.avatar_url == url or (item.content and url in item.content):
+                item.pixmap = None
+                item.layout = None
+        for item in self.engine.float_items:
+            if item.avatar_url == url or (item.content and url in item.content):
+                item.layout = None
 
     def _on_image_loaded(self, url: str) -> None:
-        """Invalidate scrolling pixmap cache when any image finishes loading."""
-        self._invalidate_pixmaps()
+        """Invalidate only the items using this URL when it finishes loading."""
+        self._invalidate_items_with_url(url)
         # If the new image is a GIF, start the animation clock
         if self._image_cache.is_animated(url):
             self._start_anim_clock()
@@ -604,8 +624,11 @@ class DanmuOverlay(QWidget):
         For animated GIFs the current frame is drawn (loops forever).
         """
         pm = None
-        if avatar_url and self._image_cache.is_animated(avatar_url) and self._anim_clock_started:
-            pm = self._image_cache.current_frame(avatar_url, self._anim_clock.elapsed())
+        if avatar_url and self._image_cache.is_animated(avatar_url):
+            # Clock must run even when the GIF came from the disk cache.
+            self._start_anim_clock()
+            if self._anim_clock_started:
+                pm = self._image_cache.current_frame(avatar_url, self._anim_clock.elapsed())
         elif avatar_url:
             pm = self._image_cache.get(avatar_url)
 
@@ -854,8 +877,11 @@ class DanmuOverlay(QWidget):
         typical web image style. Animated GIFs advance every frame.
         """
         pm = None
-        if self._image_cache.is_animated(url) and self._anim_clock_started:
-            pm = self._image_cache.current_frame(url, self._anim_clock.elapsed())
+        if self._image_cache.is_animated(url):
+            # Clock must run even when the GIF came from the disk cache.
+            self._start_anim_clock()
+            if self._anim_clock_started:
+                pm = self._image_cache.current_frame(url, self._anim_clock.elapsed())
         else:
             pm = self._image_cache.get(url)
 
@@ -900,10 +926,15 @@ class DanmuOverlay(QWidget):
     def estimate_scrolling_size(self, item: DanmuItem) -> tuple[float, float]:
         """Estimate (width, height) of a scrolling item's rendered pixmap.
 
-        Delegates to _layout_scrolling so the estimate is identical to what
-        _get_item_pixmap actually draws (no drift -> no overlap).
+        Delegates to _layout_scrolling (cached on the item) so the estimate is
+        identical to what _get_item_pixmap actually draws (no drift -> no
+        overlap) and the layout is computed at most once per item.
         """
-        lay = self._layout_scrolling(item)
+        lay = item.layout
+        if lay is None:
+            lay = self._layout_scrolling(item)
+            if lay.blocks:
+                item.layout = lay
         if not lay.blocks:
             # No measurable content (e.g. empty). Return a minimal size so the
             # engine still places it without blocking tracks forever.
@@ -923,8 +954,12 @@ class DanmuOverlay(QWidget):
         drawn pixmap matches the estimated size exactly. Items with animated
         GIFs are redrawn every frame (not cached).
         """
-        lay = self._layout_scrolling(item)
-        if not lay.blocks or lay.content_w <= 0 or lay.total_h <= 0:
+        lay = item.layout
+        if lay is None:
+            lay = self._layout_scrolling(item)
+            if lay.blocks and lay.content_w > 0 and lay.total_h > 0:
+                item.layout = lay
+        if lay is None or not lay.blocks or lay.content_w <= 0 or lay.total_h <= 0:
             return QPixmap()
 
         # Detect animated GIF across all image blocks.
@@ -934,6 +969,9 @@ class DanmuOverlay(QWidget):
                 for url in b.urls:
                     if self._image_cache.is_animated(url):
                         has_gif = True
+                        # Ensure the animation clock runs even when the GIF
+                        # was served from the disk cache (no loaded signal).
+                        self._start_anim_clock()
                         break
                 if has_gif:
                     break
@@ -1170,7 +1208,13 @@ class DanmuOverlay(QWidget):
         Returns a dict with all geometry metrics and fonts so the card can be
         drawn (and its height measured for stacking) without duplication. The
         height is computed from every segment, so stacked cards never overlap.
+        The layout is cached on the item and recomputed only when the card
+        width or font size changes (image loads invalidate it via the URL).
         """
+        cached = item.layout
+        if isinstance(cached, dict) and cached.get("_cache_key") == (w, font_size):
+            return cached
+
         padding = 10
         avatar_size = max(24, int(font_size * 1.2))
         avatar_gap = 6
@@ -1246,7 +1290,7 @@ class DanmuOverlay(QWidget):
         seg += image_block_h
         total_h = seg + padding
 
-        return {
+        layout = {
             "padding": padding,
             "avatar_size": avatar_size,
             "avatar_gap": avatar_gap,
@@ -1269,6 +1313,9 @@ class DanmuOverlay(QWidget):
             "have_loaded_images": have_loaded_images,
             "total_h": total_h,
         }
+        layout["_cache_key"] = (w, font_size)
+        item.layout = layout
+        return layout
 
     def _draw_card(self, painter: QPainter, item: DanmuItem,
                    x: float, y: float, w: float, layout: dict) -> None:

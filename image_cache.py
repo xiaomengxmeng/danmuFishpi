@@ -1,12 +1,20 @@
 """Asynchronous image download cache for avatars and inline message images.
 
 Uses QNetworkAccessManager to fetch images in the background without blocking
-the render loop. Completed downloads trigger a repaint via the loaded signal.
+the render loop. Completed downloads are persisted to a disk cache
+(%APPDATA%/DanmuFishpi/img_cache/) so restarts and reconnects do not
+re-download the same images (which previously caused heavy repeated traffic
+and slow first display after every restart).
 
 GIF images are decoded with QMovie into individual frames for animation support.
+
+Disk cache: file name = sha1(url).img, LRU eviction by mtime, capped at
+800 MB / 50,000 files. Any disk failure degrades gracefully to memory-only.
 """
 
+import hashlib
 import logging
+import os
 
 from PyQt6.QtCore import QObject, pyqtSignal, QUrl, QByteArray, QBuffer
 from PyQt6.QtGui import QPixmap, QMovie, QImage
@@ -17,6 +25,68 @@ logger = logging.getLogger("danmuFishpi.image_cache")
 # GIF89a / GIF87a magic bytes
 _GIF_MAGIC = (b"GIF89a", b"GIF87a")
 
+# Disk cache limits. 800 MB total; the file cap is a sanity bound against
+# directory bloat (800MB / ~30KB average image ~ 27k files).
+_MAX_CACHE_BYTES = 800 * 1024 * 1024
+_MAX_CACHE_FILES = 50000
+
+_CACHE_SUBDIR = os.path.join("DanmuFishpi", "img_cache")
+
+
+def _hash_url(url: str) -> str:
+    """Stable hex filename key for a URL (pure hex, no path traversal)."""
+    return hashlib.sha1(url.encode("utf-8")).hexdigest()
+
+
+def default_cache_dir() -> str:
+    """Default disk cache directory under %APPDATA%."""
+    appdata = os.environ.get("APPDATA", os.path.expanduser("~"))
+    return os.path.join(appdata, _CACHE_SUBDIR)
+
+
+def _cache_path(cache_dir: str, url: str) -> str:
+    """Disk file path for a URL inside the cache directory."""
+    return os.path.join(cache_dir, _hash_url(url) + ".img")
+
+
+def _prune(cache_dir: str, total_bytes: int,
+           max_bytes: int = _MAX_CACHE_BYTES,
+           max_files: int = _MAX_CACHE_FILES) -> int:
+    """Evict oldest .img files (by mtime) until under the caps.
+
+    Returns the number of files removed. Missing/unreadable entries are
+    skipped; non-.img files are never touched.
+    """
+    entries = []
+    try:
+        for name in os.listdir(cache_dir):
+            if not name.endswith(".img"):
+                continue
+            p = os.path.join(cache_dir, name)
+            try:
+                st = os.stat(p)
+            except OSError:
+                continue
+            entries.append((st.st_mtime, st.st_size, p))
+    except OSError:
+        return 0
+
+    entries.sort(key=lambda e: e[0])  # oldest mtime first
+    removed = 0
+    total = total_bytes
+    count = len(entries)
+    for _mtime, size, p in entries:
+        if total <= max_bytes and count <= max_files:
+            break
+        try:
+            os.remove(p)
+            removed += 1
+            total -= size
+            count -= 1
+        except OSError:
+            pass
+    return removed
+
 
 def _is_gif(data: bytes) -> bool:
     """Check raw bytes for GIF magic."""
@@ -26,8 +96,8 @@ def _is_gif(data: bytes) -> bool:
 class AnimatedImage:
     """Holds pre-decoded GIF frames for efficient per-frame rendering.
 
-    Each frame is stored as a QPixmap. ``durations`` gives per-frame display
-    time in milliseconds; ``total_duration`` is the sum for one loop.
+    Each frame is stored as a QPixmap. durations gives per-frame display
+    time in milliseconds; total_duration is the sum for one loop.
     """
 
     def __init__(self, frames: list[QPixmap], durations: list[int]):
@@ -53,7 +123,7 @@ class ImageCache(QObject):
 
     loaded = pyqtSignal(str)  # URL that just finished loading
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, cache_dir: str | None = None):
         super().__init__(parent)
         self._manager = QNetworkAccessManager(self)
         self._cache: dict[str, QPixmap] = {}
@@ -61,17 +131,113 @@ class ImageCache(QObject):
         self._pending: set[str] = set()
         self._manager.finished.connect(self._on_finished)
 
+        # Disk cache
+        self._cache_dir = cache_dir or default_cache_dir()
+        self._disk_enabled = True
+        self._total_bytes: int | None = None  # lazily scanned
+        try:
+            os.makedirs(self._cache_dir, exist_ok=True)
+        except OSError as e:
+            logger.warning(f"图片磁盘缓存不可用，降级为纯内存缓存: {e}")
+            self._disk_enabled = False
+
+    # ---- Disk cache helpers ----
+
+    def _disk_path(self, url: str) -> str | None:
+        if not self._disk_enabled:
+            return None
+        return _cache_path(self._cache_dir, url)
+
+    def _scan_total_bytes(self) -> int:
+        total = 0
+        try:
+            for name in os.listdir(self._cache_dir):
+                if not name.endswith(".img"):
+                    continue
+                try:
+                    total += os.path.getsize(os.path.join(self._cache_dir, name))
+                except OSError:
+                    pass
+        except OSError:
+            pass
+        return total
+
+    def _load_from_disk(self, url: str) -> bool:
+        """Load raw bytes from disk and decode into the memory cache.
+
+        Returns True on success. Corrupted files are removed so the caller
+        falls through to a fresh download.
+        """
+        path = self._disk_path(url)
+        if path is None:
+            return False
+        try:
+            if not os.path.exists(path):
+                return False
+            with open(path, "rb") as f:
+                raw = f.read()
+            if _is_gif(raw):
+                self._decode_gif(url, raw)
+            else:
+                pixmap = QPixmap()
+                if not pixmap.loadFromData(QByteArray(raw)):
+                    try:
+                        os.remove(path)  # corrupted: drop and re-download
+                    except OSError:
+                        pass
+                    return False
+                self._cache[url] = pixmap
+            # Touch mtime so LRU keeps recently used entries.
+            try:
+                os.utime(path, None)
+            except OSError:
+                pass
+            logger.debug(f"Image from disk cache: {url}")
+            return True
+        except OSError as e:
+            logger.debug(f"磁盘缓存读取失败 {url}: {e}")
+            return False
+
+    def _persist(self, url: str, raw: bytes) -> None:
+        """Atomically write raw bytes to disk, evicting when over the cap."""
+        if not self._disk_enabled:
+            return
+        path = self._disk_path(url)
+        if path is None:
+            return
+        try:
+            tmp = path + ".tmp"
+            with open(tmp, "wb") as f:
+                f.write(raw)
+            os.replace(tmp, path)
+            if self._total_bytes is None:
+                self._total_bytes = self._scan_total_bytes()
+            self._total_bytes += len(raw)
+            if self._total_bytes > _MAX_CACHE_BYTES:
+                removed = _prune(self._cache_dir, self._total_bytes)
+                if removed:
+                    self._total_bytes = None  # re-scan lazily after pruning
+        except OSError as e:
+            logger.warning(f"图片磁盘缓存写入失败（降级为纯内存缓存）: {e}")
+            self._disk_enabled = False
+            self._total_bytes = None
+
+    # ---- Public API ----
+
     def get(self, url: str) -> QPixmap | None:
-        """Return cached pixmap or start downloading and return None.
+        """Return cached pixmap (memory or disk) or start downloading.
 
         For animated GIFs this returns the *first frame* as a static fallback
-        until ``is_animated`` + ``current_frame`` are used.
+        until is_animated + current_frame are used.
         """
         if not url:
             return None
 
         if url in self._cache:
             return self._cache[url]
+
+        if self._load_from_disk(url):
+            return self._cache.get(url)
 
         if url not in self._pending:
             self._pending.add(url)
@@ -95,6 +261,21 @@ class ImageCache(QObject):
             return None
         return anim.current_frame(elapsed_ms)
 
+    def clear_disk_cache(self) -> None:
+        """Delete all cached image files (memory cache untouched)."""
+        if not self._disk_enabled:
+            return
+        try:
+            for name in os.listdir(self._cache_dir):
+                if name.endswith(".img") or name.endswith(".tmp"):
+                    try:
+                        os.remove(os.path.join(self._cache_dir, name))
+                    except OSError:
+                        pass
+            self._total_bytes = None
+        except OSError as e:
+            logger.warning(f"清空磁盘缓存失败: {e}")
+
     def _on_finished(self, reply: QNetworkReply) -> None:
         url = reply.url().toString()
         self._pending.discard(url)
@@ -111,6 +292,7 @@ class ImageCache(QObject):
             # Detect GIF and decode frames
             if _is_gif(raw):
                 self._decode_gif(url, raw)
+                self._persist(url, raw)
                 self.loaded.emit(url)
                 reply.deleteLater()
                 return
@@ -118,6 +300,7 @@ class ImageCache(QObject):
             pixmap = QPixmap()
             if pixmap.loadFromData(data):
                 self._cache[url] = pixmap
+                self._persist(url, raw)
                 logger.debug(f"Image loaded: {url} ({pixmap.width()}x{pixmap.height()})")
                 self.loaded.emit(url)
             else:
@@ -183,4 +366,3 @@ class ImageCache(QObject):
             pixmap = QPixmap()
             if pixmap.loadFromData(data):
                 self._cache[url] = pixmap
-
