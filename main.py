@@ -154,7 +154,11 @@ class App:
         self.bridge.chatroom_error.connect(self._on_chatroom_error)
 
         # Create notification manager (silent, no Windows sound)
-        self.notification_manager = NotificationManager(theme=self.config.theme)
+        # 复用 overlay 的 ImageCache，特别关注通知头像不额外发起下载
+        self.notification_manager = NotificationManager(
+            theme=self.config.theme,
+            image_cache=self.overlay._image_cache,
+        )
 
         # Create system tray
         self.tray = Tray(self.app, self._create_icon(), {
@@ -241,7 +245,11 @@ class App:
             if self.config.display.notify_follow:
                 self.notification_manager.show(
                     "特别关注",
-                    f"{msg.get('nickname', user_id)}: {msg.get('content', '')[:60]}",
+                    f"{nickname}: {msg.get('content', '')[:200]}",
+                    avatar_url=msg.get("avatar_url", ""),
+                    avatar_nickname=nickname,
+                    accent=True,
+                    duration_ms=8000,
                 )
 
         self.overlay.add_message(msg)
