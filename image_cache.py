@@ -7,6 +7,9 @@ GIF images are decoded with QMovie into individual frames for animation support.
 """
 
 import logging
+from pathlib import Path
+import hashlib
+from urllib.parse import urlparse, unquote
 
 from PyQt6.QtCore import QObject, pyqtSignal, QUrl, QByteArray, QBuffer
 from PyQt6.QtGui import QPixmap, QMovie, QImage
@@ -59,7 +62,33 @@ class ImageCache(QObject):
         self._cache: dict[str, QPixmap] = {}
         self._animated: dict[str, AnimatedImage] = {}
         self._pending: set[str] = set()
+        # on-disk cache directory (hidden .cache/images under the package)
+        self._cache_dir = (
+            Path(__file__).resolve().parent / ".cache" / "images"
+        )
+        try:
+            self._cache_dir.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            # If creation fails, fall back to in-memory only
+            logger.debug("Could not create disk cache directory; using memory only")
         self._manager.finished.connect(self._on_finished)
+
+    def _cache_path_for_url(self, url: str) -> Path | None:
+        """Return a deterministic Path in the disk cache for the given URL.
+
+        Uses SHA256(url) plus the URL's path suffix when available.
+        Returns None if disk caching isn't available.
+        """
+        try:
+            if not hasattr(self, "_cache_dir") or self._cache_dir is None:
+                return None
+            parsed = urlparse(url)
+            suffix = Path(unquote(parsed.path)).suffix
+            ext = suffix if suffix and len(suffix) <= 8 else ""
+            name = hashlib.sha256(url.encode("utf-8")).hexdigest() + ext
+            return self._cache_dir / name
+        except Exception:
+            return None
 
     def get(self, url: str) -> QPixmap | None:
         """Return cached pixmap or start downloading and return None.
@@ -72,6 +101,24 @@ class ImageCache(QObject):
 
         if url in self._cache:
             return self._cache[url]
+
+        # Try loading from disk cache first
+        try:
+            path = self._cache_path_for_url(url)
+            if path and path.exists():
+                raw = path.read_bytes()
+                # GIF handling
+                if _is_gif(raw):
+                    self._decode_gif(url, raw)
+                    return self._cache.get(url)
+
+                pixmap = QPixmap()
+                if pixmap.loadFromData(QByteArray(raw)):
+                    self._cache[url] = pixmap
+                    logger.debug(f"Image loaded from disk cache: {url} -> {path}")
+                    return pixmap
+        except Exception as e:
+            logger.debug(f"Disk cache load failed for {url}: {e}")
 
         if url not in self._pending:
             self._pending.add(url)
@@ -107,6 +154,14 @@ class ImageCache(QObject):
 
             data = reply.readAll()
             raw = bytes(data)
+
+            # Persist raw bytes to disk cache if possible
+            try:
+                path = self._cache_path_for_url(url)
+                if path is not None:
+                    path.write_bytes(raw)
+            except Exception as e:
+                logger.debug(f"Failed to write disk cache for {url}: {e}")
 
             # Detect GIF and decode frames
             if _is_gif(raw):
