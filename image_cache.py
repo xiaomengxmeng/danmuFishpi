@@ -3,21 +3,27 @@
 Uses QNetworkAccessManager to fetch images in the background without blocking
 the render loop. Completed downloads are persisted to a disk cache
 (%APPDATA%/DanmuFishpi/img_cache/) so restarts and reconnects do not
-re-download the same images (which previously caused heavy repeated traffic
-and slow first display after every restart).
+re-download the same images.
+
+Memory is bounded: decoded pixmaps are kept in a small LRU (the disk cache is
+the real backing store, so evicted images re-decode from disk on demand).
+Large images are decoded downscaled (longest side <= 512px) since the overlay
+only ever renders them at ~80px; the disk cache keeps the original bytes.
+GIF frames are decoded via QMovie for animation and capped in count.
 
 GIF images are decoded with QMovie into individual frames for animation support.
 
-Disk cache: file name = sha1(url).img, LRU eviction by mtime, capped at
+Disk cache: file name = sha1(url).<real-ext>, LRU eviction by mtime, capped at
 800 MB / 50,000 files. Any disk failure degrades gracefully to memory-only.
 """
 
 import hashlib
 import logging
 import os
+from collections import OrderedDict
 
-from PyQt6.QtCore import QObject, pyqtSignal, QUrl, QByteArray, QBuffer
-from PyQt6.QtGui import QPixmap, QMovie, QImage
+from PyQt6.QtCore import (QObject, pyqtSignal, QUrl, QByteArray, QBuffer, QSize, QIODevice)
+from PyQt6.QtGui import QPixmap, QMovie, QImage, QImageReader
 from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkRequest, QNetworkReply
 
 logger = logging.getLogger("danmuFishpi.image_cache")
@@ -29,6 +35,17 @@ _GIF_MAGIC = (b"GIF89a", b"GIF87a")
 # directory bloat (800MB / ~30KB average image ~ 27k files).
 _MAX_CACHE_BYTES = 800 * 1024 * 1024
 _MAX_CACHE_FILES = 50000
+
+# In-memory decoded cache limits (the disk cache is the backing store, so
+# evicted images simply re-decode from disk on demand - no re-download).
+_MAX_MEM_ITEMS = 300       # max decoded static pixmaps held in memory
+_MAX_MEM_BYTES = 256 * 1024 * 1024  # approx decoded bytes cap
+_MAX_MEM_GIFS = 20         # max animated GIFs held in memory
+
+# Decode downscale: the overlay renders inline images at ~80px (2x DPR even
+# smaller than this), so decoding at full resolution wastes memory. Decoded
+# images are capped at this longest side; the disk keeps original bytes.
+_MAX_DECODE_DIM = 512
 
 # All cache file suffixes (files store raw image bytes; the extension is
 # cosmetic and reflects the real format so they can be opened directly).
@@ -46,6 +63,24 @@ def default_cache_dir() -> str:
     """Default disk cache directory under %APPDATA%."""
     appdata = os.environ.get("APPDATA", os.path.expanduser("~"))
     return os.path.join(appdata, _CACHE_SUBDIR)
+
+
+def _scaled_size(w: int, h: int, max_dim: int = _MAX_DECODE_DIM) -> tuple[int, int]:
+    """Proportionally scale (w, h) so the longest side <= max_dim (no upscale)."""
+    longest = max(w, h)
+    if longest <= max_dim:
+        return w, h
+    scale = max_dim / longest
+    return max(1, int(round(w * scale))), max(1, int(round(h * scale)))
+
+
+def _pixmap_bytes(pm: QPixmap) -> int:
+    """Approximate decoded memory of a QPixmap (ARGB32, includes DPR)."""
+    try:
+        dpr = pm.devicePixelRatio() or 1.0
+    except Exception:
+        dpr = 1.0
+    return int(pm.width() * pm.height() * 4 * dpr)
 
 
 def _cache_path(cache_dir: str, url: str, ext: str = ".img") -> str:
@@ -83,10 +118,10 @@ def _find_cache_path(cache_dir: str, url: str) -> str | None:
 def _prune(cache_dir: str, total_bytes: int,
            max_bytes: int = _MAX_CACHE_BYTES,
            max_files: int = _MAX_CACHE_FILES) -> int:
-    """Evict oldest .img files (by mtime) until under the caps.
+    """Evict oldest cache files (by mtime) until under the caps.
 
     Returns the number of files removed. Missing/unreadable entries are
-    skipped; non-.img files are never touched.
+    skipped; non-cache files are never touched.
     """
     entries = []
     try:
@@ -157,9 +192,11 @@ class ImageCache(QObject):
     def __init__(self, parent=None, cache_dir: str | None = None):
         super().__init__(parent)
         self._manager = QNetworkAccessManager(self)
-        self._cache: dict[str, QPixmap] = {}
-        self._animated: dict[str, AnimatedImage] = {}
+        # Ordered by recency: hit/store moves to end, eviction pops the front.
+        self._cache: "OrderedDict[str, QPixmap]" = OrderedDict()
+        self._animated: "OrderedDict[str, AnimatedImage]" = OrderedDict()
         self._pending: set[str] = set()
+        self._mem_bytes = 0  # approx decoded bytes currently in memory
         self._manager.finished.connect(self._on_finished)
 
         # Disk cache
@@ -171,6 +208,74 @@ class ImageCache(QObject):
         except OSError as e:
             logger.warning(f"图片磁盘缓存不可用，降级为纯内存缓存: {e}")
             self._disk_enabled = False
+
+    # ---- Memory cache helpers ----
+
+    def _store_static(self, url: str, pixmap: QPixmap) -> None:
+        """Insert a decoded static pixmap into the bounded memory cache."""
+        self._cache[url] = pixmap
+        self._cache.move_to_end(url)
+        self._mem_bytes += _pixmap_bytes(pixmap)
+        self._evict_memory()
+
+    def _store_gif(self, url: str, first_frame: QPixmap,
+                   anim: AnimatedImage) -> None:
+        """Insert a decoded GIF (first frame + animation) into memory."""
+        self._cache[url] = first_frame
+        self._cache.move_to_end(url)
+        self._animated[url] = anim
+        self._animated.move_to_end(url)
+        self._mem_bytes += _pixmap_bytes(first_frame)
+        for f in anim.frames:
+            self._mem_bytes += _pixmap_bytes(f)
+        self._evict_memory()
+
+    def _evict_memory(self) -> None:
+        """Evict oldest decoded images from memory until under the caps.
+
+        The disk cache is untouched: evicted URLs re-decode from disk on the
+        next get() (no network request).
+        """
+        while (len(self._cache) > _MAX_MEM_ITEMS
+               or len(self._animated) > _MAX_MEM_GIFS
+               or self._mem_bytes > _MAX_MEM_BYTES):
+            if not self._cache:
+                break
+            url, pm = self._cache.popitem(last=False)
+            self._mem_bytes -= _pixmap_bytes(pm)
+            if url in self._animated:
+                anim = self._animated.pop(url)
+                for f in anim.frames:
+                    self._mem_bytes -= _pixmap_bytes(f)
+
+    def _decode_static(self, url: str, raw: bytes) -> QPixmap | None:
+        """Decode raw bytes into a QPixmap, downscaling large images.
+
+        Reads the header size first (no full decode) so setScaledSize can cap
+        the longest side at _MAX_DECODE_DIM. Falls back to QPixmap.loadFromData
+        for formats QImageReader cannot handle.
+        """
+        buf = QBuffer()
+        buf.setData(QByteArray(raw))
+        buf.open(QIODevice.OpenModeFlag.ReadOnly)
+        reader = QImageReader(buf)
+        reader.setAutoTransform(True)
+        try:
+            size = reader.size()
+        except Exception:
+            size = QSize()
+        if size.isValid() and size.width() > 0 and size.height() > 0:
+            w, h = _scaled_size(size.width(), size.height())
+            if (w, h) != (size.width(), size.height()):
+                reader.setScaledSize(QSize(w, h))
+            image = reader.read()
+            if not image.isNull():
+                return QPixmap.fromImage(image)
+            logger.debug(f"QImageReader decode failed for {url}, falling back")
+        pixmap = QPixmap()
+        if pixmap.loadFromData(QByteArray(raw)):
+            return pixmap
+        return None
 
     # ---- Disk cache helpers ----
 
@@ -205,14 +310,14 @@ class ImageCache(QObject):
             if _is_gif(raw):
                 self._decode_gif(url, raw)
             else:
-                pixmap = QPixmap()
-                if not pixmap.loadFromData(QByteArray(raw)):
+                pm = self._decode_static(url, raw)
+                if pm is None:
                     try:
                         os.remove(path)  # corrupted: drop and re-download
                     except OSError:
                         pass
                     return False
-                self._cache[url] = pixmap
+                self._store_static(url, pm)
             # Touch mtime so LRU keeps recently used entries.
             try:
                 os.utime(path, None)
@@ -272,6 +377,7 @@ class ImageCache(QObject):
             return None
 
         if url in self._cache:
+            self._cache.move_to_end(url)  # refresh LRU recency
             return self._cache[url]
 
         if self._load_from_disk(url):
@@ -335,11 +441,11 @@ class ImageCache(QObject):
                 reply.deleteLater()
                 return
 
-            pixmap = QPixmap()
-            if pixmap.loadFromData(data):
-                self._cache[url] = pixmap
+            pm = self._decode_static(url, raw)
+            if pm is not None:
+                self._store_static(url, pm)
                 self._persist(url, raw)
-                logger.debug(f"Image loaded: {url} ({pixmap.width()}x{pixmap.height()})")
+                logger.debug(f"Image loaded: {url} ({pm.width()}x{pm.height()})")
                 self.loaded.emit(url)
             else:
                 logger.debug(f"Image decode failed: {url}")
@@ -350,7 +456,7 @@ class ImageCache(QObject):
             reply.deleteLater()
 
     def _decode_gif(self, url: str, data: bytes) -> None:
-        """Decode a GIF into individual frames via QMovie."""
+        """Decode a GIF into individual frames via QMovie (bounded memory)."""
         try:
             movie = QMovie()
             movie.setCacheMode(QMovie.CacheMode.CacheAll)
@@ -361,12 +467,20 @@ class ImageCache(QObject):
             if not movie.isValid():
                 logger.debug(f"GIF decode invalid: {url}")
                 # Fallback: try loading as static
-                pixmap = QPixmap()
-                if pixmap.loadFromData(data):
-                    self._cache[url] = pixmap
+                pm = self._decode_static(url, data)
+                if pm is not None:
+                    self._store_static(url, pm)
                 return
 
+            # Peek intrinsic size (frame 0) to choose a downscaled decode size.
             movie.jumpToFrame(0)
+            intrinsic = movie.currentImage().size()
+            if intrinsic.isValid() and intrinsic.width() > 0:
+                w, h = _scaled_size(intrinsic.width(), intrinsic.height())
+                if (w, h) != (intrinsic.width(), intrinsic.height()):
+                    movie.setScaledSize(QSize(w, h))
+                    movie.jumpToFrame(0)  # re-read frame 0 at scaled size
+
             frames: list[QPixmap] = []
             durations: list[int] = []
 
@@ -389,8 +503,7 @@ class ImageCache(QObject):
 
             if frames:
                 # Store first frame in static cache as fallback
-                self._cache[url] = frames[0]
-                self._animated[url] = AnimatedImage(frames, durations)
+                self._store_gif(url, frames[0], AnimatedImage(frames, durations))
                 logger.debug(
                     f"GIF loaded: {url} "
                     f"({frames[0].width()}x{frames[0].height()}, "
@@ -401,6 +514,6 @@ class ImageCache(QObject):
         except Exception as e:
             logger.error(f"GIF decode error for {url}: {e}")
             # Fallback: static image
-            pixmap = QPixmap()
-            if pixmap.loadFromData(data):
-                self._cache[url] = pixmap
+            pm = self._decode_static(url, data)
+            if pm is not None:
+                self._store_static(url, pm)
