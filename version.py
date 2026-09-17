@@ -4,7 +4,7 @@
 """
 
 APP_NAME = "弹幕鱼排"
-APP_VERSION = "1.0.5"
+APP_VERSION = "1.0.6"
 
 # 发送给 FishPI 服务器的客户端标识（小尾巴包含版本号）
 CLIENT_VERSION = f"Python/小梦的科技v{APP_VERSION}"
